@@ -430,11 +430,9 @@ static double get_weapon_dispersion(const Gun& g, const Character& c, const Ammo
     d += dispersion_from_skill(avg, ref);
     return d;
 }
-// 开火时的总散布（线性源求和 + 后坐）  ranged.cpp:673
-static double total_gun_dispersion(const Gun& g, const Character& c, const Ammo* ammo, double recoil)
-{
-    return get_weapon_dispersion(g, c, ammo) + recoil;
-}
+// 开火时的总散布 = get_weapon_dispersion() + 当前后坐（ranged.cpp:673 的
+// Character::total_gun_dispersion）。用到的地方直接在表达式里写，
+// 不再单独包一层函数。
 
 // ---- 3.10 50% 好击距离  creature.cpp:3574 / ranged.cpp:662 ------------------
 static const int DISP_TABLE[59] = {
@@ -513,12 +511,8 @@ static int tier_index(double missed_by)
     return 0;                                   // 爆头
 }
 
-// ---- 3.12 命中档位  game_constants.h:96 / creature.cpp:1193 -----------------
-// 阈值用上面的 ACC_* 常量，档位名称用 zh::hit_tier()（见 zh_cn.h）
-static const char* hit_tier(double missed_by)
-{
-    return zh::hit_tier(missed_by);
-}
+// 命中档位的名称见 zh::hit_tier()（zh_cn.h），判定阈值见上面的 ACC_* 常量。
+// tier_index() 用于概率统计时把未命中度分桶。
 
 // -----------------------------------------------------------------------------
 //  瞄准模拟
@@ -779,22 +773,9 @@ static void print_dispersion_impact(const Gun& g, const Character& c, const Ammo
     }
     std::cout << NOTE_DISP_COL;
 
-    std::cout << HDR_TIER;
-    const double precise_disp = total_gun_dispersion(g, c, ammo, limit);
-    const double target_size = 1.0;
-    std::cout << "  " << pad(C_RANGE, 10);
-    for (auto& L : levels) std::cout << pad(L.label, 20);
-    std::cout << "\n  " << std::string(90, '-') << "\n";
-    for (double rng : {1.0, 2.0, 5.0, 10.0, 20.0, 30.0, 40.0}) {
-        std::cout << "  " << pad(std::to_string((int)rng) + U_TILE, 10);
-        for (auto& L : levels) {
-            const double total = total_gun_dispersion(g, c, ammo, L.recoil);
-            const double mb = missed_by(total, rng, target_size);
-            std::cout << pad(hit_tier(mb), 20);
-        }
-        std::cout << "\n";
-    }
-    std::cout << NOTE_TIER << (int)precise_disp << NOTE_TIER2;
+    // 「命中档位 vs 距离」那张表已移除 —— 它用的是散布的 max()（最坏情况），
+    // 只能给出一个确定性的档位，容易被当成"必然结果"。后面新增的
+    // 命中档位概率表给出的是真实分布，信息量更大也更诚实。
 }
 
 // ---- 命中档位概率表 ----------------------------------------------------------
@@ -820,7 +801,7 @@ static void print_hit_probabilities(const Gun& g, const Character& c, const Ammo
         { zh::AIM_LEVEL_3, ar.precise_th },
     };
 
-    std::cout << HDR_PROB << NOTE_PROB;
+    std::cout << HDR_PROB << NOTE_PROB << NOTE_HITRULE;
 
     std::mt19937 rng( 20260910u );   // 固定种子 —— 结果可复现，方便反复对照
     std::vector<double> samples( N );

@@ -155,12 +155,9 @@ inline const char *C_50RANGE     = "50%好击距离";
 inline const char *NOTE_DISP_COL =
     "  （总散布 = 瞄准误差 + 固定散布。固定散布不随瞄准进度变化，"
     "由枪身+弹药散布 ÷18、敏捷修正、技能不足惩罚三项相加而来）\n";
-inline const char *HDR_TIER      = "\n  命中档位 vs 距离（分别用各档的总散布；距离越远越差）\n\n";
-inline const char *C_RANGE       = "距离";
-inline const char *NOTE_TIER     = "\n  （精准档总散布 = ";
-inline const char *NOTE_TIER2    =
-    "；命中判定：未命中度 = 横向偏移 ÷ 目标体积，"
-    "横向偏移 = tan(误差角÷2) × 距离 × 2，见源码 ballistics.cpp 第 224 行）\n";
+inline const char *NOTE_HITRULE  =
+    "  命中判定：未命中度 = 横向偏移 ÷ 目标体积，"
+    "横向偏移 = tan(误差角÷2) × 距离 × 2（源码 ballistics.cpp 第 224 行）\n";
 
 // ---- 装配对话框 ----
 inline const char *SLOTS_LINE    =
