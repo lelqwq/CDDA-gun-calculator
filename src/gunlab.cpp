@@ -570,22 +570,10 @@ static void print_gun_summary(const Gun& g, const Character& c, const Ammo* ammo
 {
     using namespace zh::t;
 
-    std::cout << HDR_GUN;
-    std::cout << "  " << g.name << "\n";
-    std::cout << LBL_SKILL     << zh::skill(g.skill) << "\n";
-    std::cout << LBL_WEIGHT    << effective_weight(g) << " g\n";
-    std::cout << LBL_VOLUME    << effective_volume(g) << " ml";
-    if (!g.mods.empty()) std::cout << "   （含已装配件）";
-    std::cout << "\n";
-    std::cout << LBL_DISP_RAW  << g.dispersion << "\n";
-    std::cout << LBL_DISP_REAL << gun_dispersion(g, ammo) << NOTE_DIV18;
-    std::cout << LBL_SIGHT     << g.sight_dispersion << NOTE_NO_DIV18;
-    std::cout << LBL_HANDLING  << g.handling << "\n";
-
-    if (ammo) {
-        std::cout << LBL_AMMO << ammo->name << LBL_AMMO_SEP << ammo->recoil
-                  << LBL_AMMO_SEP2 << ammo->dispersion << BR_CLOSE;
-    }
+    // 只保留枪名、技能、配件 —— 其余内部值不再显示（与游戏界面不是一个体系，
+    // 容易被误当成错误）。要看数值就看下面的「游戏内显示值」。
+    std::cout << "\n================= " << g.name << " =================\n";
+    std::cout << LBL_SKILL << zh::skill(g.skill) << "\n";
 
     std::cout << HDR_MODS;
     if (g.mods.empty()) std::cout << NO_MODS;
@@ -599,11 +587,9 @@ static void print_gun_summary(const Gun& g, const Character& c, const Ammo* ammo
         std::cout << "\n";
     }
 
-    const double limit = most_accurate_aiming_method_limit(g, c);
     std::cout << HDR_AIMPARAM << c.dex << HDR_AIMPARAM2 << c.per
               << HDR_AIMPARAM3 << c.skill_level << HDR_AIMPARAM4;
-    std::cout << LBL_HIPLIMIT << point_shooting_limit(c.skill(g.skill), g.skill == "archery") << "\n";
-    std::cout << LBL_AIMLIMIT << limit << "\n";
+    // 瞄准精度上限 = 上面的「瞄准散布」，不重复显示
     std::cout << LBL_VOLFACT << std::fixed << std::setprecision(3)
               << aim_factor_from_volume(g, effective_volume(g)) << NOTE_VOLFACT;
     std::cout << LBL_LENFACT << aim_factor_from_length(g.longest_side_mm, false)
@@ -612,19 +598,18 @@ static void print_gun_summary(const Gun& g, const Character& c, const Ammo* ammo
               << get_weapon_dispersion(g, c, ammo) << "\n";
 
     const double ammo_rec = ammo ? ammo->recoil : 0.0;
-    const int gr_hip   = gun_recoil(g, c.str, ammo_rec, false);   // 两脚架未架设
-    const int gr_bipod = gun_recoil(g, c.str, ammo_rec, true);    // 两脚架架设（仅影响带两脚架的配件）
-    std::cout << LBL_SHOTREC << gr_hip;
-    if (g.has_mod("underbarrel")) std::cout << NOTE_BIPOD << gr_bipod << "）";
-    std::cout << "\n";
+    const int gr_hip = gun_recoil(g, c.str, ammo_rec, false);
     std::cout << LBL_ADDREC << (int)added_recoil_per_shot(gr_hip, recoil_absorb(c.skill_level))
               << NOTE_ABSORB << std::setprecision(0) << recoil_absorb(c.skill_level) * 100 << PCT_CLOSE;
 
     // 游戏界面显示值 —— 照着游戏里同一把枪的数值核对（0.I 格式：分项相加）
     std::cout << HDR_GAMEVAL;
+    if (ammo) std::cout << GV_AMMO << ammo->name << NL;
+
     const int d_gun  = (int)game_dispersion_gun(g);
     const int d_ammo = (int)game_dispersion_ammo(g, ammo);
     std::cout << GV_DISP << d_gun << GV_PLUS << d_ammo << GV_DISP_EQ << (d_gun + d_ammo) << NL;
+    std::cout << NOTE_DISP_1 << NOTE_DISP_2;
 
     const std::pair<int, int> sd = sight_dispersion_pair(g, c);
     const int psl = (int)point_shooting_limit(c.skill(g.skill), g.skill == "archery");
@@ -634,13 +619,18 @@ static void print_gun_summary(const Gun& g, const Character& c, const Ammo* ammo
         std::cout << GV_SIGHT << sd.first << GV_PLUS << (sd.second - sd.first)
                   << GV_DISP_EQ << sd.second << NL;
     }
+    std::cout << NOTE_SIGHT_1 << NOTE_SIGHT_2;
 
     std::cout << GV_RECOIL << (int)game_recoil(g, c, ammo) << NL;
+    std::cout << NOTE_RECOIL_1 << NOTE_RECOIL_2;
     if (g.has_mod("underbarrel")) {
         std::cout << GV_RECOIL_BIP << (int)game_recoil_bipod(g, c, ammo) << NL;
     }
-    std::cout << GV_THEO << (int)game_min_recoil(g, c, ammo)
+
+    const int min_rec = (int)game_min_recoil(g, c, ammo);
+    std::cout << GV_THEO << min_rec
               << GV_STR_REQ << (int)(gun_base_weight(g) / 333.0) << GV_STR_END << NL;
+    std::cout << NOTE_THEO_1 << NOTE_THEO_2;
 }
 
 static void print_aim_timeline(const Gun& g, const Character& c, const Ammo* ammo)

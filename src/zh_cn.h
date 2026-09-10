@@ -200,13 +200,13 @@ inline const char *SEARCH_ADDED  = "    已加入：";
 inline const char *SEARCH_BAD    = "    编号超出范围\n";
 inline const char *SEARCH_MORE    = "  ...（还有 %d 把未列出，请用更具体的关键词）\n";
 
-// ---- 游戏内显示值（用于与游戏界面直接对照）----
+// ---- 游戏内显示值 ----
 // 格式与 0.I 稳定版的物品界面一致：分项相加，显示的是原始内部值（不除以 100）
 inline const char *HDR_GAMEVAL   =
     "\n  --- 游戏内显示值 ---\n"
-    "  （以下是游戏物品界面显示的数字，格式与 0.I 稳定版一致。\n"
-    "    它们都是内部原始值，与上面参与公式的数值不是一个刻度）\n";
-inline const char *GV_DISP       = "    散布（枪身+弹药）  : ";
+    "  （与游戏物品界面显示的数字一致，可随时照着核对）\n";
+inline const char *GV_AMMO       = "    弹药                 : ";
+inline const char *GV_DISP       = "    散布（枪身+弹药）    : ";
 inline const char *GV_DISP_EQ    = " = ";
 inline const char *GV_SIGHT      = "    瞄准散布（瞄具+视差）: ";
 inline const char *GV_SIGHT_PS   = "    瞄准散布（腰射）     : ";
@@ -217,6 +217,24 @@ inline const char *GV_STR_REQ    = "（所需力量: ";
 inline const char *GV_STR_END    = "）";
 inline const char *GV_PLUS       = "+";
 inline const char *NL            = "\n";
+
+// 每一项的作用说明（直接跟在数值下方）
+inline const char *NOTE_DISP_1  =
+    "        └ 子弹的抖动角度。值越大，同一个距离上越容易从「好击」掉到「擦伤」\n";
+inline const char *NOTE_DISP_2  =
+    "          误差随距离线性放大：1 格时几乎无差别，20 格外就很明显\n";
+inline const char *NOTE_SIGHT_1 =
+    "        └ 瞄准能压到的误差下限 —— 瞄得再久，散布也不会低于这个值\n";
+inline const char *NOTE_SIGHT_2 =
+    "          由瞄具本身散布 + 感知造成的视差（感知越低视差越大）组成\n";
+inline const char *NOTE_RECOIL_1 =
+    "        └ 每开一枪，给瞄准误差增加 5 倍该值（技能最多吸收一半）\n";
+inline const char *NOTE_RECOIL_2 =
+    "          误差一旦涨上去就只能靠重新瞄准压回来，这是枪战的主要时间成本\n";
+inline const char *NOTE_THEO_1  =
+    "        └ 力量补足到「所需力量」后能达到的后坐，是这把枪的下限\n";
+inline const char *NOTE_THEO_2  =
+    "          与实际后坐相等 = 你的力量已经够了；更大 = 力量不足，后坐被放大\n";
 
 // ---- 对比表 ----
 inline const char *CMP_TITLE     = "\n================= 枪械对比 =================\n";
