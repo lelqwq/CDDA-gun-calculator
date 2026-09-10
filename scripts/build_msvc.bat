@@ -31,7 +31,7 @@ REM /utf-8 is REQUIRED: the sources are UTF-8, but MSVC defaults to the
 REM system codepage (936 on Chinese Windows), which mangles Chinese literals.
 cl /nologo /std:c++17 /utf-8 /EHsc /W4 /O2 /Isrc ^
    /Fe:build\gunlab_msvc.exe /Fo:build\ ^
-   src\gunlab.cpp src\gun_data.cpp ^
+   src\gunlab.cpp src\gun_data.cpp src\gunlab_math.cpp ^
    src\generated\gen_guns.cpp src\generated\gen_ammo.cpp src\generated\gen_gunmods.cpp
 set RC=%ERRORLEVEL%
 

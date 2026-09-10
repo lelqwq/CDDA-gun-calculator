@@ -134,20 +134,25 @@ cmake --build build --config Release
 
 ## 目录结构
 
+代码分三层：**数据层**（生成 + 容器）、**计算层**（纯函数）、**界面层**。
+`gunlab_core` 静态库打包前两层，不含任何输入输出 —— 所以命令行版和以后
+的图形版共用同一套公式，算出来的数字永远一致。
+
 ```
 gunlab/
 ├── CMakeLists.txt
-├── README.md
+├── README.md / CLAUDE.md
 ├── .gitignore / .gitattributes
 ├── src/
-│   ├── gunlab.cpp                 公式 + 排版 + 交互
-│   ├── gun_data.h                 结构体 + 常量 + 接口
-│   ├── gun_data.cpp               容器 + 填充函数
-│   ├── zh_cn.h                    全部中文文本
-│   └── generated/                 ★ 自动生成，勿手工编辑
+│   ├── gun_data.h                 结构体 + 常量 + 接口          ┐
+│   ├── gun_data.cpp               容器 + 填充函数              │ gunlab_core
+│   ├── gunlab_math.h/.cpp     ★   全部公式（纯函数，无 IO）     │ 静态库
+│   ├── zh_cn.h                    全部中文文本                 │
+│   └── generated/                 自动生成，勿手工编辑          ┘
 │       ├── gen_guns.cpp           401 把枪
 │       ├── gen_ammo.cpp           730 种弹药
 │       └── gen_gunmods.cpp        170 个配件
+│   └── gunlab.cpp                 命令行界面（排版 + 交互）
 ├── scripts/
 │   ├── gen_gun_data.py            ★ 数据生成器
 │   ├── build_msvc.bat / build_gcc.bat

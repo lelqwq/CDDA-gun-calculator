@@ -31,18 +31,21 @@ else()
     endif()
 endif()
 
-# ---- 可执行文件 -------------------------------------------------------------
-add_executable(gunlab
-    src/gunlab.cpp
+# ---- 核心库 -----------------------------------------------------------------
+# 数据 + 公式，不含任何输入输出。命令行版与图形版共用这一层。
+add_library(gunlab_core STATIC
     src/gun_data.cpp
+    src/gunlab_math.cpp
     # 由 scripts/gen_gun_data.py 从游戏数据生成，请勿手工编辑
     src/generated/gen_guns.cpp
     src/generated/gen_ammo.cpp
     src/generated/gen_gunmods.cpp
 )
+target_include_directories(gunlab_core PUBLIC src)
 
-# 生成的代码用 #include "gun_data.h"，所以要能找到 src/
-target_include_directories(gunlab PRIVATE src)
+# ---- 命令行版 ---------------------------------------------------------------
+add_executable(gunlab src/gunlab.cpp)
+target_link_libraries(gunlab PRIVATE gunlab_core)
 
 # ---- 输出路径 ---------------------------------------------------------------
 # 让 exe 直接落在 build/ 下，而不是 build/Debug/ 之类的子目录（Visual Studio

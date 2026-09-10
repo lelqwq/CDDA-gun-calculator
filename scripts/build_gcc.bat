@@ -28,7 +28,7 @@ REM libgcc_s_seh-1.dll / libstdc++-6.dll at run time, which are NOT on PATH
 REM when you double-click the exe from Explorer.
 g++ -std=c++17 -O2 -Wall -Wextra -Isrc -static -static-libgcc -static-libstdc++ ^
     -o build\gunlab_gcc.exe ^
-    src\gunlab.cpp src\gun_data.cpp ^
+    src\gunlab.cpp src\gun_data.cpp src\gunlab_math.cpp ^
     src\generated\gen_guns.cpp src\generated\gen_ammo.cpp src\generated\gen_gunmods.cpp
 set RC=%ERRORLEVEL%
 
