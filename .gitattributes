@@ -1,0 +1,38 @@
+# =============================================================================
+#  .gitattributes  —  统一换行符与文本判定
+# -----------------------------------------------------------------------------
+#  目标：仓库里一律存 LF，检出时按下面的规则转换。
+#  这样跨平台克隆不会出现「整个文件都变了」的假 diff。
+# =============================================================================
+
+# 默认：自动识别文本，检出时用 LF
+* text=auto eol=lf
+
+# ---- Windows 批处理必须 CRLF ----
+# cmd.exe 对 LF 换行的 .bat 在遇到标签（goto/label）时可能解析出错，
+# 这里强制检出为 CRLF。
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+
+# ---- 明确标为文本（便于跨平台 diff）----
+*.cpp  text
+*.h    text
+*.md   text
+*.txt  text
+*.py   text
+*.cmake text
+CMakeLists.txt text
+.gitignore     text
+.gitattributes text
+
+# ---- 二进制：不做任何转换 ----
+*.exe   binary
+*.obj   binary
+*.o     binary
+*.a     binary
+*.lib   binary
+*.pdb   binary
+*.png   binary
+*.jpg   binary
+*.ico   binary
+*.zip   binary

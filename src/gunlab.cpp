@@ -1,0 +1,743 @@
+// =============================================================================
+//  gunlab.cpp  —  Cataclysm-DDA 枪械数学模型（独立复刻）
+// -----------------------------------------------------------------------------
+//  用途：不启动游戏，手动输入枪械/弹药/配件/人物数据，直接算出
+//        · 后坐力、散布、瞄准速度
+//        · 瞄准到各档位需要多少行动点
+//        · 一回合能降低多少后坐
+//        · 每发开火增加多少后坐
+//        · 50% 好击距离
+//
+//  所有公式逐条复刻自 Cataclysm-DDA 源码，注释里标了出处（文件:行号）。
+//  纯标准库，无外部依赖。Visual Studio 里新建「空项目」→ 添加此 .cpp → F5。
+//
+//  数据单位说明（非常重要）：
+//    dispersion / sight_dispersion / recoil 在 JSON 里的单位是「1/100 角分」，
+//    但进游戏前 gun_dispersion() 会先除以 GUN_DISPERSION_DIVIDER（=18）。
+//    sight_dispersion 不除。本程序忠实复刻这一点。
+// =============================================================================
+
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <iomanip>
+#include <iostream>
+#include <limits>
+#include <sstream>
+#include <string>
+#include <vector>
+
+// ---- Windows 控制台编码 -----------------------------------------------------
+// 源文件是 UTF-8，编译器（MSVC 的 /utf-8、或 GCC 默认）会把中文字面量按 UTF-8
+// 存进可执行文件。但 Windows 控制台默认用系统代码页（简体中文是 936/GBK）解读
+// 输出，于是中文变成「鏋鏁板妯″瀷」这样的乱码。
+// 解决办法：启动时把控制台输出代码页切成 UTF-8，两边就一致了。
+#ifdef _WIN32
+#  ifndef NOMINMAX
+#    define NOMINMAX          // 防止 windows.h 定义 min/max 宏，撞上 std::min/std::max
+#  endif
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  include <windows.h>
+#endif
+
+#include "gun_data.h"     // 数据结构 + 常量 + 内置数据库（数据层）
+#include "zh_cn.h"        // 全部中文文本
+
+// 常量（MAX_RECOIL / MAX_SKILL / GUN_DISPERSION_DIVIDER / ACC_* 等）见 gun_data.h。
+// 数据结构（Gun / Ammo / GunMod / Character）与数据库见 gun_data.h / gun_data.cpp。
+
+// =============================================================================
+//  第 1 部分：数学工具
+// =============================================================================
+
+// cata_utility.cpp:157
+static double logarithmic(double t) { return 1.0 / (1.0 + std::exp(-t)); }
+
+// cata_utility.cpp:166 —— 注意：min 处返回 1.0，max 处返回 0.0（递减）
+static double logarithmic_range(int mn, int mx, int pos)
+{
+    const double LOGI_CUTOFF = 4.0;
+    const double LOGI_MIN    = logarithmic(-LOGI_CUTOFF);
+    const double LOGI_MAX    = logarithmic(+LOGI_CUTOFF);
+    const double LOGI_RANGE  = LOGI_MAX - LOGI_MIN;
+
+    if (mn >= mx) return 0.0;
+    if (pos <= mn) return 1.0;
+    if (pos >= mx) return 0.0;
+
+    const double unit_pos   = double(pos - mn) / double(mx - mn);
+    const double scaled_pos = LOGI_CUTOFF - 2.0 * LOGI_CUTOFF * unit_pos;
+    return (logarithmic(scaled_pos) - LOGI_MIN) / LOGI_RANGE;
+}
+
+// =============================================================================
+//  第 2 部分：数据模型
+// =============================================================================
+//  struct Gun / Ammo / GunMod / Character 与全部常量都搬到了 gun_data.h，
+//  内置数据库搬到了 gun_data.cpp。本文件只负责公式与显示。
+
+// =============================================================================
+//  第 3 部分：公式实现
+// =============================================================================
+
+// ---- 3.1 视差  character.cpp:855 --------------------------------------------
+// ranged_per_mod() = max((20 - PER) * 1.2, 0)      character.cpp:5061
+static int ranged_per_mod(double per)
+{
+    return (int)std::max((20.0 - per) * 1.2, 0.0);
+}
+static int get_character_parallax(double per, double vision, bool zoom)
+{
+    int p = zoom ? (int)(ranged_per_mod(per) * 0.25) : ranged_per_mod(per);
+    // ranged_dispersion_vision_mod: 满视觉时为 0，受损时为正
+    p += (int)std::round((1.0 - vision) * 30.0);
+    return std::max(p, 0);
+}
+// character.cpp:850
+static double effective_dispersion(double per, double vision, double disp, bool zoom)
+{
+    return get_character_parallax(per, vision, zoom) + disp;
+}
+
+// ---- 3.2 腰射极限  character.cpp:882 ----------------------------------------
+static double point_shooting_limit(double skill, bool archery)
+{
+    double s = std::min(skill, double(MAX_SKILL));
+    if (archery) return 30.0 + 220.0 / (1.0 + s);
+    return 200.0 - 10.0 * s;
+}
+
+// ---- 3.3 瞄准方式速度衰减  character.cpp:864 --------------------------------
+static double modified_sight_speed(double aim_speed_modifier, double eff_sight_disp, double recoil)
+{
+    if (recoil <= eff_sight_disp) return 0.0;
+    if (eff_sight_disp < 0)       return 0.0;
+    const double att = 1.0 - logarithmic_range((int)eff_sight_disp,
+                                               (int)(3.0 * eff_sight_disp + 1.0),
+                                               (int)recoil);
+    return (10.0 + aim_speed_modifier) * att;
+}
+
+// ---- 3.4 瞄准精度上限  character.cpp:968 ------------------------------------
+static double most_accurate_aiming_method_limit(const Gun& g, const Character& c)
+{
+    double limit = point_shooting_limit(c.skill(g.skill), g.skill == "archery");
+
+    if (!g.disable_sights) {
+        double iron = effective_dispersion(c.per, c.vision, g.sight_dispersion, false);
+        if (limit > iron) limit = iron;
+    }
+    for (auto& m : g.mods) {
+        if (m.field_of_view > 0 && m.sight_dispersion >= 0) {
+            limit = std::min(limit, effective_dispersion(c.per, c.vision, m.sight_dispersion, m.zoom));
+        }
+    }
+    return limit;
+}
+
+// ---- 3.5 瞄准方式择优  character.cpp:899 ------------------------------------
+static double fastest_aiming_method_speed(const Gun& g, const Character& c, double recoil,
+                                          double target_range, double target_size_moa, bool visible)
+{
+    const double skill    = c.skill(g.skill);
+    const bool   archery  = (g.skill == "archery");
+
+    // 腰射
+    double point_mod = archery ? skill : ((g.skill == "pistol") ? (10.0 + 4.0 * skill) : skill);
+    double best = modified_sight_speed(point_mod, point_shooting_limit(skill, archery), recoil);
+
+    // 铁瞄：注意 mod 传的是 0（只有 modified_sight_speed 内部那个 10.0 底数）
+    if (!g.disable_sights) {
+        const double iron_FOV   = 480.0;
+        const double iron_limit = effective_dispersion(c.per, c.vision, g.sight_dispersion, false);
+        const double iron_speed = modified_sight_speed(0, iron_limit, recoil);
+        if (iron_limit < recoil && iron_speed > best && recoil <= iron_FOV) {
+            best = iron_speed;
+        }
+    }
+
+    // 激光类瞄具的可用性  character.cpp:929
+    // 原式：range <= (10 + PER) * max(1 - 光照/120, 0)
+    // 本程序假定白天/充足光照，故光照项为 1
+    const int base_distance = 10;
+    const bool laser_available = visible && (target_range <= (base_distance + c.per));
+
+    // 其它瞄具配件
+    for (auto& m : g.mods) {
+        if (m.sight_dispersion < 0 || m.field_of_view <= 0) continue;
+        if (m.laser_sight && !laser_available) continue;
+
+        const double parallax = m.zoom ? get_character_parallax(c.per, c.vision, true)
+                                       : get_character_parallax(c.per, c.vision, false);
+        const double e_eff = parallax + m.sight_dispersion;
+
+        double eff_mod = (4.0 * parallax > target_size_moa)
+                         ? std::min(0.0, m.aim_speed_modifier)
+                         : m.aim_speed_modifier;
+
+        if (e_eff < recoil && recoil <= m.field_of_view) {
+            double e_speed = modified_sight_speed(eff_mod, e_eff, recoil);
+            if (e_speed > best) best = e_speed;
+        }
+    }
+    return best;
+}
+
+// ---- 3.6 体积 / 长度因子  character.cpp:1044 / 1056 -------------------------
+static double aim_factor_from_volume(const Gun& g, double volume_ml)
+{
+    double factor = (g.skill == "pistol") ? 4.0 : 1.0;
+    const double min_volume = 800.0;
+    if (volume_ml > min_volume) {
+        factor *= std::pow(min_volume / volume_ml, 1.0 / 3.0);
+    }
+    return std::max(factor, 0.2);
+}
+// 贴墙时才会惩罚长枪；open_area = true 时恒为 1.0
+static double aim_factor_from_length(double length_mm, bool enclosed)
+{
+    double factor = 1.0;
+    if (enclosed) {
+        factor = 1.0 - (length_mm - 300.0) / 1000.0;
+        factor = std::min(factor, 1.0);
+    }
+    return std::max(factor, 0.2);
+}
+
+// ---- 3.7 每 move 能降低多少后坐  character.cpp:1038 -------------------------
+struct AimContext {
+    double limit        = 0.0;
+    double vol_factor   = 1.0;
+    double len_factor   = 1.0;
+    double limb_mod     = 1.0;
+    double enchant      = 1.0;
+    double target_range = 10.0;
+    double target_size_moa = 60.0;
+    bool   visible      = true;
+};
+
+static double aim_per_move(const Gun& g, const Character& c, double recoil, const AimContext& ctx)
+{
+    const double ssm = fastest_aiming_method_speed(g, c, recoil,
+                                                   ctx.target_range, ctx.target_size_moa, ctx.visible);
+    const double skill = c.skill(g.skill);
+
+    double aim_speed = 10.0;
+    aim_speed += ssm;
+    aim_speed += 0.25 * std::min(skill, double(MAX_SKILL));   // aim_speed_skill_mod  character_modifier.cpp:280
+    aim_speed += (c.dex - 8.0) * 0.5;                          // aim_speed_dex_mod    character_modifier.cpp:292
+    aim_speed *= ctx.limb_mod;                                 // aim_speed_mod（握/操/举）
+    aim_speed /= std::max(1.0, 2.5 - 0.2 * skill);             // 技能 7.5 以下的重惩罚
+    aim_speed *= std::max(recoil / MAX_RECOIL,
+                          1.0 - logarithmic_range(0, (int)MAX_RECOIL, (int)recoil));
+
+    const double base_cap = 5.0 + skill + std::max(10.0, 3.0 * skill);
+    aim_speed = std::min(aim_speed, base_cap * ctx.vol_factor);
+    aim_speed = std::min(aim_speed, base_cap * ctx.len_factor);
+
+    aim_speed *= 2.4;
+    aim_speed = std::max(aim_speed, MIN_RECOIL_IMPROVEMENT);
+    aim_speed = std::min(aim_speed, recoil - ctx.limit);        // 不能超过瞄具允许的下限
+    return aim_speed * ctx.enchant;
+}
+
+// ---- 3.8 开一枪加多少后坐  item_gun_tool_ammo.cpp:1316 ----------------------
+static int gun_recoil(const Gun& g, double arm_str, double ammo_recoil,
+                      bool bipod = false, bool ideal_strength = false)
+{
+    if (!g.ammo_required || ammo_recoil <= 0) return 0;
+
+    const double wt = ideal_strength
+                    ? g.weight_g / 333.0
+                    : std::min(g.weight_g, arm_str * 333.0) / 333.0;
+
+    double handling = g.handling;
+    for (auto& m : g.mods) {
+        if (bipod || !m.bipod) handling += m.handling_modifier;
+    }
+    handling /= 10.0;                                       // JSON 是人为放大的整数
+    handling = std::pow(wt, 0.8) * std::pow(handling, 1.2);
+
+    const double qty = g.recoil + ammo_recoil;
+    if (handling > 1.0) return (int)(qty / handling);
+    return (int)(qty * (1.0 + std::fabs(handling)));
+}
+
+// 每发实际加到 Character::recoil 的量  ranged.cpp:1271
+// 代码里带了 5.0 的底倍数（注释：Temporarily scale by 5x）
+static double added_recoil_per_shot(int qty, double absorb)
+{
+    return 5.0 * qty * (1.0 - absorb);
+}
+// 技能最多吸收 50%  ranged.cpp:1165
+static double recoil_absorb(double skill)
+{
+    return std::min(skill, double(MAX_SKILL)) / 20.0;
+}
+
+// ---- 3.9 散布合成 -----------------------------------------------------------
+// item::gun_dispersion  item_gun_tool_ammo.cpp:1192
+static double gun_dispersion(const Gun& g, const Ammo* ammo,
+                             int damage_level = 0, bool with_scaling = true)
+{
+    double sum = g.dispersion;
+    for (auto& m : g.mods) sum += m.dispersion_modifier;
+    sum += damage_level * DISPERSION_PER_GUN_DAMAGE;
+    sum = std::max(sum, 0.0);
+    if (ammo) sum += ammo->dispersion;   // 简化：未做 barrel_length 插值
+
+    if (!with_scaling) return sum;
+    sum = std::max(std::round(sum / GUN_DISPERSION_DIVIDER), 1.0);
+    return sum;
+}
+// dispersion_from_skill  ranged.cpp:2651
+static double dispersion_from_skill(double skill, double weapon_dispersion)
+{
+    if (skill >= MAX_SKILL) return 0.0;
+    const double shortfall = MAX_SKILL - skill;
+    double penalty = 10.0 * shortfall;
+    const double threshold = 5.0;
+
+    if (skill >= threshold) {
+        const double post = MAX_SKILL - skill;
+        return penalty + (weapon_dispersion * post * 1.25) / (MAX_SKILL - threshold);
+    }
+    const double pre = threshold - skill;
+    penalty += weapon_dispersion * (1.25 + pre * 10.0 / threshold);
+    return penalty;
+}
+// Character::get_weapon_dispersion（不含后坐）  ranged.cpp:2674
+static double get_weapon_dispersion(const Gun& g, const Character& c, const Ammo* ammo)
+{
+    double d = gun_dispersion(g, ammo);
+
+    d += (c.dex - 8.0) * 1.0;        // ranged_dex_mod（线性源，简化）
+    // 手部操作惩罚：健康时为 0
+    d += 0.0;
+
+    const double avg = c.avg_skill(g.skill);
+    const double ref = (g.skill == "archery") ? 450.0 / GUN_DISPERSION_DIVIDER
+                                              : 300.0 / GUN_DISPERSION_DIVIDER;
+    d += dispersion_from_skill(avg, ref);
+    return d;
+}
+// 开火时的总散布（线性源求和 + 后坐）  ranged.cpp:673
+static double total_gun_dispersion(const Gun& g, const Character& c, const Ammo* ammo, double recoil)
+{
+    return get_weapon_dispersion(g, c, ammo) + recoil;
+}
+
+// ---- 3.10 50% 好击距离  creature.cpp:3574 / ranged.cpp:662 ------------------
+static const int DISP_TABLE[59] = {
+    1731, 859, 573, 421, 341, 286, 245, 214, 191, 175,
+     151, 143, 129, 118, 114, 107, 101,  94,  90,  78,
+      78,  78,  74,  71,  68,  66,  62,  61,  59,  57,
+      46,  46,  46,  46,  46,  46,  45,  45,  44,  42,
+      41,  41,  39,  39,  38,  37,  36,  35,  34,  34,
+      33,  33,  32,  30,  30,  30,  30,  29,  28
+};
+static int range_with_even_chance_of_good_hit(double dispersion)
+{
+    int r = 0;
+    while (r < 59 && dispersion < DISP_TABLE[r]) r++;
+    return r;   // 返回格数；59 = 超出表格
+}
+
+// ---- 3.11 命中偏移  line.cpp:21 / ballistics.cpp:224 ------------------------
+// iso_tangent(distance, angle) = tan(angle/2) * distance * 2
+// 角度单位：角分（代码把 dispersion 直接喂给 from_arcmin，见 ballistics.cpp:224）
+static const double PI_CONST = 3.14159265358979323846;
+static double iso_tangent(double distance_tiles, double angle_arcmin)
+{
+    const double angle_rad = (angle_arcmin / 60.0) * (PI_CONST / 180.0);
+    return std::tan(angle_rad / 2.0) * distance_tiles * 2.0;
+}
+// ballistics.cpp:227 —— missed_by 归一化到 0(正中) ~ 1(完全脱靶)
+static double missed_by(double total_dispersion, double range_tiles, double target_size)
+{
+    return std::min(1.0, iso_tangent(range_tiles, total_dispersion) / target_size);
+}
+
+// ---- 3.12 命中档位  game_constants.h:96 / creature.cpp:1193 -----------------
+// 阈值用上面的 ACC_* 常量，档位名称用 zh::hit_tier()（见 zh_cn.h）
+static const char* hit_tier(double missed_by)
+{
+    return zh::hit_tier(missed_by);
+}
+
+// -----------------------------------------------------------------------------
+//  瞄准模拟
+// -----------------------------------------------------------------------------
+struct AimResult {
+    int    moves_to_regular = -1;
+    int    moves_to_careful = -1;
+    int    moves_to_precise = -1;
+    double regular_th = 0, careful_th = 0, precise_th = 0;
+    double recoil_after_1_turn = 0;
+    double delta_1_turn        = 0;
+};
+
+static AimResult simulate_aim(const Gun& g, const Character& c, AimContext ctx,
+                              int turn_moves = 100, int max_moves = 5000)
+{
+    AimResult res;
+    ctx.limit = most_accurate_aiming_method_limit(g, c);
+    ctx.vol_factor = aim_factor_from_volume(g, g.volume_ml);
+    // ctx.len_factor 由调用方设置
+
+    const double sd = ctx.limit;
+    res.precise_th = sd;
+    res.careful_th = ((MAX_RECOIL - sd) / 40.0) + sd;
+    res.regular_th = ((MAX_RECOIL - sd) / 10.0) + sd;
+
+    double recoil = MAX_RECOIL;
+    int moves = 0;
+    while (recoil > sd && moves < max_moves) {
+        const double amt = aim_per_move(g, c, recoil, ctx);
+        if (amt <= 0) break;
+        recoil = std::max(sd, recoil - amt);
+        moves++;
+        if (res.moves_to_regular < 0 && recoil <= res.regular_th) res.moves_to_regular = moves;
+        if (res.moves_to_careful < 0 && recoil <= res.careful_th) res.moves_to_careful = moves;
+        if (res.moves_to_precise < 0 && recoil <= res.precise_th) res.moves_to_precise = moves;
+        if (moves == turn_moves) {
+            res.recoil_after_1_turn = recoil;
+            res.delta_1_turn        = MAX_RECOIL - recoil;
+        }
+    }
+    if (res.recoil_after_1_turn == 0) {
+        res.recoil_after_1_turn = recoil;
+        res.delta_1_turn        = MAX_RECOIL - recoil;
+    }
+    return res;
+}
+
+// =============================================================================
+//  第 4 部分：内置数据库
+// =============================================================================
+//  g_guns / g_ammo / g_mods 和 init_database() 都搬到了 gun_data.cpp。
+//  想改枪械、弹药、配件的数值 —— 编辑那个文件。
+
+// =============================================================================
+//  第 5 部分：输出
+// =============================================================================
+//  所有中文文本都在 zh_cn.h 里，本文件只负责排版与计算。
+
+// 终端显示宽度：中日韩字符占 2 列，其余占 1 列（按 UTF-8 码点判断，不按字节）
+static size_t display_width(const std::string& s)
+{
+    size_t w = 0;
+    for (size_t i = 0; i < s.size(); ) {
+        const unsigned char c = (unsigned char)s[i];
+        unsigned int cp = 0;
+        size_t len = 1;
+        if      (c < 0x80)          { cp = c;        len = 1; }
+        else if ((c & 0xE0) == 0xC0){ cp = c & 0x1F; len = 2; }
+        else if ((c & 0xF0) == 0xE0){ cp = c & 0x0F; len = 3; }
+        else                        { cp = c & 0x07; len = 4; }
+        for (size_t k = 1; k < len && i + k < s.size(); k++)
+            cp = (cp << 6) | ((unsigned char)s[i + k] & 0x3F);
+
+        const bool wide = (cp >= 0x1100 && cp <= 0x115F)      // 韩文字母
+                       || (cp >= 0x2E80 && cp <= 0xA4CF)      // CJK 部首 / 汉字 / 假名
+                       || (cp >= 0xAC00 && cp <= 0xD7A3)      // 韩文音节
+                       || (cp >= 0xF900 && cp <= 0xFAFF)      // CJK 兼容
+                       || (cp >= 0xFF00 && cp <= 0xFF60)      // 全角
+                       || (cp >= 0xFFE0 && cp <= 0xFFE6);
+        w += wide ? 2 : 1;
+        i += len;
+    }
+    return w;
+}
+static std::string pad(const std::string& s, size_t n)
+{
+    std::string r = s;
+    size_t w = display_width(s);
+    while (w < n) { r += ' '; w++; }
+    return r;
+}
+// 技能名 / 槽位名 / 命中档位的中文转换都在 zh_cn.h 里（zh::skill / zh::slot / zh::hit_tier）
+
+static void print_gun_summary(const Gun& g, const Character& c, const Ammo* ammo)
+{
+    using namespace zh::t;
+
+    std::cout << HDR_GUN;
+    std::cout << "  " << g.name << "\n";
+    std::cout << LBL_SKILL     << zh::skill(g.skill) << "\n";
+    std::cout << LBL_WEIGHT    << g.weight_g << " g\n";
+    std::cout << LBL_VOLUME    << g.volume_ml << " ml\n";
+    std::cout << LBL_DISP_RAW  << g.dispersion << "\n";
+    std::cout << LBL_DISP_REAL << gun_dispersion(g, ammo) << NOTE_DIV18;
+    std::cout << LBL_SIGHT     << g.sight_dispersion << NOTE_NO_DIV18;
+    std::cout << LBL_HANDLING  << g.handling << "\n";
+
+    if (ammo) {
+        std::cout << LBL_AMMO << ammo->name << LBL_AMMO_SEP << ammo->recoil
+                  << LBL_AMMO_SEP2 << ammo->dispersion << BR_CLOSE;
+    }
+
+    std::cout << HDR_MODS;
+    if (g.mods.empty()) std::cout << NO_MODS;
+    for (auto& m : g.mods) {
+        std::cout << "    " << pad(m.name, 22)
+                  << F_SLOT << pad(zh::slot(m.location), 12)
+                  << F_HANDLING << m.handling_modifier
+                  << F_AIM << m.aim_speed_modifier;
+        if (m.sight_dispersion >= 0) std::cout << F_SIGHTDISP << m.sight_dispersion;
+        if (m.field_of_view   >= 0) std::cout << F_FOV << m.field_of_view;
+        std::cout << "\n";
+    }
+
+    const double limit = most_accurate_aiming_method_limit(g, c);
+    std::cout << HDR_AIMPARAM << c.dex << HDR_AIMPARAM2 << c.per
+              << HDR_AIMPARAM3 << c.skill_level << HDR_AIMPARAM4;
+    std::cout << LBL_HIPLIMIT << point_shooting_limit(c.skill(g.skill), g.skill == "archery") << "\n";
+    std::cout << LBL_AIMLIMIT << limit << "\n";
+    std::cout << LBL_VOLFACT << std::fixed << std::setprecision(3)
+              << aim_factor_from_volume(g, g.volume_ml) << NOTE_VOLFACT;
+    std::cout << LBL_LENFACT << aim_factor_from_length(g.longest_side_mm, false)
+              << SEP_SLASH << aim_factor_from_length(g.longest_side_mm, true) << "\n";
+    std::cout << LBL_TOTDISP << std::setprecision(1)
+              << get_weapon_dispersion(g, c, ammo) << "\n";
+
+    const double ammo_rec = ammo ? ammo->recoil : 0.0;
+    const int gr_hip   = gun_recoil(g, c.str, ammo_rec, false);   // 两脚架未架设
+    const int gr_bipod = gun_recoil(g, c.str, ammo_rec, true);    // 两脚架架设（仅影响带两脚架的配件）
+    std::cout << LBL_SHOTREC << gr_hip;
+    if (g.has_mod("underbarrel")) std::cout << NOTE_BIPOD << gr_bipod << "）";
+    std::cout << "\n";
+    std::cout << LBL_ADDREC << (int)added_recoil_per_shot(gr_hip, recoil_absorb(c.skill_level))
+              << NOTE_ABSORB << std::setprecision(0) << recoil_absorb(c.skill_level) * 100 << PCT_CLOSE;
+}
+
+static void print_aim_timeline(const Gun& g, const Character& c, const Ammo* ammo)
+{
+    using namespace zh::t;
+
+    (void)ammo;   // 瞄准时间线只由枪/瞄具/人物决定，与弹药无关
+    std::cout << HDR_AIMTIME;
+    std::cout << NOTE_AIMTIME;
+    std::cout << "  " << pad(C_SKILL, 10) << pad(C_TO_1, 14) << pad(C_TO_2, 14)
+              << pad(C_TO_3, 14) << pad(C_AFTER_TURN, 18) << "\n";
+    std::cout << "  " << std::string(72, '-') << "\n";
+
+    for (double s : {0.0, 2.0, 5.0, 8.0, 10.0}) {
+        Character cc = c; cc.skill_level = s;
+        AimContext ctx; ctx.len_factor = 1.0;
+        AimResult r = simulate_aim(g, cc, ctx);
+
+        std::ostringstream a, b, d;
+        a << r.moves_to_regular << U_AP;
+        b << r.moves_to_careful << U_AP;
+        d << r.moves_to_precise << U_AP;
+        std::ostringstream e;
+        e << std::fixed << std::setprecision(0) << r.recoil_after_1_turn;
+
+        std::cout << "  " << pad(std::to_string((int)s), 10)
+                  << pad(a.str(), 14) << pad(b.str(), 14) << pad(d.str(), 14)
+                  << pad(e.str(), 16) << "\n";
+    }
+    AimContext ctx; ctx.len_factor = 1.0;
+    AimResult r0 = simulate_aim(g, c, ctx);
+    std::cout << LBL_THRESHOLD << (int)r0.regular_th
+              << LBL_THRESH2 << (int)r0.careful_th
+              << LBL_THRESH3 << (int)r0.precise_th << "\n";
+    std::cout << LBL_TURNDROP << (int)r0.delta_1_turn << ARROW_OPEN
+              << (int)r0.recoil_after_1_turn << ARROW_CLOSE;
+}
+
+static void print_dispersion_impact(const Gun& g, const Character& c, const Ammo* ammo)
+{
+    using namespace zh::t;
+
+    std::cout << HDR_DISPIMP;
+    const int table_size = 59;
+    std::cout << SUB_DISPIMP;
+    for (double d : {3000.0, 1500.0, 1000.0, 500.0, 300.0, 150.0, 100.0, 60.0, 40.0, 30.0}) {
+        int r = range_with_even_chance_of_good_hit(d);
+        std::string rs = (r >= table_size) ? OVER_TABLE : (std::to_string(r) + U_TILE);
+        std::cout << "    " << pad(std::to_string((int)d), 8) << " → " << rs << "\n";
+    }
+
+    const double limit = most_accurate_aiming_method_limit(g, c);
+    const struct { const char* label; double recoil; } levels[] = {
+        { zh::AIM_LEVEL_0, MAX_RECOIL },
+        { zh::AIM_LEVEL_1, ((MAX_RECOIL - limit) / 10.0) + limit },
+        { zh::AIM_LEVEL_2, ((MAX_RECOIL - limit) / 40.0) + limit },
+        { zh::AIM_LEVEL_3, limit },
+    };
+
+    std::cout << HDR_INSTANCE;
+    std::cout << "  " << pad(C_AIMLEVEL, 12) << pad(C_RECOIL, 12) << pad(C_TOTDISP, 10)
+              << pad(C_50RANGE, 16) << "\n";
+    std::cout << "  " << std::string(52, '-') << "\n";
+    for (auto& L : levels) {
+        const double total = total_gun_dispersion(g, c, ammo, L.recoil);
+        const int rng = range_with_even_chance_of_good_hit(total);
+        std::cout << "  " << pad(L.label, 12)
+                  << pad(std::to_string((int)L.recoil), 12)
+                  << pad(std::to_string((int)total), 10)
+                  << pad(rng >= table_size ? "59 格以上" : (std::to_string(rng) + U_TILE), 16) << "\n";
+    }
+
+    std::cout << HDR_TIER;
+    const double precise_disp = total_gun_dispersion(g, c, ammo, limit);
+    const double target_size = 1.0;
+    std::cout << "  " << pad(C_RANGE, 10);
+    for (auto& L : levels) std::cout << pad(L.label, 20);
+    std::cout << "\n  " << std::string(90, '-') << "\n";
+    for (double rng : {1.0, 2.0, 5.0, 10.0, 20.0, 30.0, 40.0}) {
+        std::cout << "  " << pad(std::to_string((int)rng) + U_TILE, 10);
+        for (auto& L : levels) {
+            const double total = total_gun_dispersion(g, c, ammo, L.recoil);
+            const double mb = missed_by(total, rng, target_size);
+            std::cout << pad(hit_tier(mb), 20);
+        }
+        std::cout << "\n";
+    }
+    std::cout << NOTE_TIER << (int)precise_disp << NOTE_TIER2;
+}
+
+static void print_mod_catalog()
+{
+    using namespace zh::t;
+
+    std::cout << HDR_CATALOG;
+    std::cout << "  " << pad(C_NAME, 24) << pad(C_SLOT, 16) << pad(C_HANDLING, 8)
+              << pad(C_AIM, 8) << pad(C_DISP, 8) << C_FOV << "\n";
+    std::cout << "  " << std::string(74, '-') << "\n";
+    for (auto& m : g_mods) {
+        if (m.handling_modifier == 0 && m.aim_speed_modifier == 0) continue;
+        std::ostringstream h, a, s, f;
+        h << m.handling_modifier; a << m.aim_speed_modifier;
+        s << (m.sight_dispersion < 0 ? "-" : std::to_string((int)m.sight_dispersion));
+        f << (m.field_of_view   < 0 ? "-" : std::to_string((int)m.field_of_view));
+        std::cout << "  " << pad(m.name, 24) << pad(zh::slot(m.location), 16)
+                  << pad(h.str(), 8) << pad(a.str(), 8) << pad(s.str(), 8) << f.str() << "\n";
+    }
+}
+
+// =============================================================================
+//  第 6 部分：主程序
+// =============================================================================
+
+// ---- 安全输入：读整行；空行/非法输入一律回退到默认值 ----
+static std::string read_line(const std::string& prompt, const std::string& def)
+{
+    std::cout << prompt;
+    std::string line;
+    if (!std::getline(std::cin, line)) return def;
+    const size_t a = line.find_first_not_of(" \t\r\n");
+    if (a == std::string::npos) return def;
+    const size_t b = line.find_last_not_of(" \t\r\n");
+    return line.substr(a, b - a + 1);
+}
+static double read_number(const std::string& prompt, double def)
+{
+    const std::string s = read_line(prompt, "");
+    if (s.empty()) return def;
+    try { return std::stod(s); } catch (...) { return def; }
+}
+
+static int pick(const std::string& prompt, int count)
+{
+    std::cout << prompt << "\n";
+    for (int i = 0; i < count; i++) std::cout << "    " << i << ") " << g_guns[i].name << "\n";
+    int v = (int)read_number(zh::t::PROMPT_SEL, 0);
+    if (v < 0 || v >= count) v = 0;
+    return v;
+}
+
+static void equip_dialog(Gun& g)
+{
+    using namespace zh::t;
+
+    std::cout << SLOTS_LINE;
+    std::cout << SLOTS_NOTE;
+
+    std::cout << MODLIST_HDR;
+    for (size_t i = 0; i < g_mods.size(); i++) {
+        std::cout << "    " << pad(std::to_string(i), 4) << pad(g_mods[i].name, 24)
+                  << pad(zh::slot(g_mods[i].location), 16)
+                  << DLG_HANDLING << std::showpos << (int)g_mods[i].handling_modifier << std::noshowpos
+                  << DLG_AIM << std::showpos << (int)g_mods[i].aim_speed_modifier << std::noshowpos;
+        if (g_mods[i].sight_dispersion >= 0) std::cout << DLG_DISP << (int)g_mods[i].sight_dispersion;
+        if (g_mods[i].field_of_view   >= 0) std::cout << DLG_FOV << (int)g_mods[i].field_of_view;
+        std::cout << "\n";
+    }
+
+    while (true) {
+        const std::string s = read_line(PROMPT_MODID, "");
+        if (s.empty()) break;
+        int v;
+        try { v = std::stoi(s); } catch (...) { break; }
+        if (v < 0) break;
+        if (v < (int)g_mods.size()) {
+            const GunMod nm = g_mods[v];
+            const size_t before = g.mods.size();
+            g.mods.erase(std::remove_if(g.mods.begin(), g.mods.end(),
+                         [&](const GunMod& x){ return x.location == nm.location; }), g.mods.end());
+            const bool replaced = (g.mods.size() != before);
+            g.mods.push_back(nm);
+            std::cout << ADDED << nm.name;
+            if (replaced) std::cout << REPLACED;
+            std::cout << "\n";
+        } else {
+            std::cout << OUT_OF_RANGE;
+        }
+    }
+}
+
+int main()
+{
+#ifdef _WIN32
+    // 让控制台按 UTF-8 解读本程序的中文输出（否则显示为乱码）
+    SetConsoleOutputCP(CP_UTF8);
+#endif
+
+    init_database();
+
+    using namespace zh::t;
+
+    std::cout << RULE << TITLE << TITLE_SUB << RULE;
+
+    Gun gun = g_guns[pick(PROMPT_PICK, (int)g_guns.size())];
+
+    std::cout << HDR_AMMO;
+    for (size_t i = 0; i < g_ammo.size(); i++)
+        std::cout << "    " << i << ") " << pad(g_ammo[i].name, 20)
+                  << LBL_AMMO_REC << (int)g_ammo[i].recoil
+                  << LBL_AMMO_DISP << (int)g_ammo[i].dispersion << "\n";
+    int ai = (int)read_number(PROMPT_SEL, 0);
+    if (ai < 0 || ai >= (int)g_ammo.size()) ai = 0;
+    const Ammo* ammo = &g_ammo[ai];
+
+    equip_dialog(gun);
+
+    Character ch;
+    ch.gun_skill = gun.skill;
+    std::cout << HDR_CHAR;
+    ch.skill_level        = read_number("  " + zh::skill(gun.skill) + P_SKILL_LV, 0);
+    ch.marksmanship_level = read_number(P_GUNSKILL, 0);
+    ch.dex                = read_number(P_DEX, 8);
+    ch.per                = read_number(P_PER, 8);
+    ch.str                = read_number(P_STR, 8);
+    ch.skill_level        = std::max(0.0, std::min(ch.skill_level, double(MAX_SKILL)));
+    ch.marksmanship_level = std::max(0.0, std::min(ch.marksmanship_level, double(MAX_SKILL)));
+    if (ch.dex < 1) ch.dex = 8;
+    if (ch.per < 1) ch.per = 8;
+    if (ch.str < 1) ch.str = 8;
+
+    print_gun_summary(gun, ch, ammo);
+    print_aim_timeline(gun, ch, ammo);
+    print_dispersion_impact(gun, ch, ammo);
+    print_mod_catalog();
+
+    std::cout << DONE;
+    std::string dummy;
+    std::getline(std::cin, dummy);
+    return 0;
+}

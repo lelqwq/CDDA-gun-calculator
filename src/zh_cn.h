@@ -1,0 +1,204 @@
+// =============================================================================
+//  zh_cn.h  —  gunlab 的全部中文文本
+// -----------------------------------------------------------------------------
+//  这个文件里只有"给人看的字"。gunlab.cpp 里只有数学和逻辑。
+//
+//  译名来源：游戏本体 CDDA\lang\mo\zh_CN\LC_MESSAGES\cataclysm-dda.mo
+//            （用 Python 的 gettext 提取，见 extract_zh.py）
+//
+//  想改中文？只动这一个文件，然后重新编译即可。
+//  想加英文版？照抄一份 en_us.h，把 gunlab.cpp 顶部的 #include 换掉。
+//
+//  注意：GunMod.location（"underbarrel"）、Gun.skill（"rifle"）、GunMod.id
+//  这些英文串是**逻辑用的键**（代码里有 has_mod("underbarrel") 之类的比较，
+//  且与游戏 JSON 字段对应），所以不能改成中文 —— 但它们不会出现在输出里，
+//  显示时一律经过下面的 skill() / slot() 转换。
+// =============================================================================
+
+#pragma once
+
+#include <string>
+
+namespace zh {
+
+// =============================================================================
+//  一、译名表（英文键 -> 中文）
+// =============================================================================
+
+// 技能名
+inline std::string skill( const std::string &key )
+{
+    if( key == "rifle" )    return "步枪";
+    if( key == "pistol" )   return "手枪";
+    if( key == "shotgun" )  return "霰弹枪";
+    if( key == "smg" )      return "冲锋枪";
+    if( key == "launcher" ) return "发射器";
+    if( key == "archery" )  return "弓术";
+    if( key == "gun" )      return "枪械";
+    return key;
+}
+
+// 改装槽位名
+inline std::string slot( const std::string &key )
+{
+    if( key == "rail" )            return "导轨";
+    if( key == "sights" )          return "瞄具";
+    if( key == "underbarrel" )     return "管下";
+    if( key == "muzzle" )          return "枪口";
+    if( key == "barrel" )          return "枪管";
+    if( key == "bore" )            return "口径";
+    if( key == "mechanism" )       return "机械";
+    if( key == "stock" )           return "枪托";
+    if( key == "stock accessory" ) return "枪托配件";
+    if( key == "sling" )           return "背带";
+    if( key == "brass catcher" )   return "弹壳收集器";
+    if( key == "bayonet lug" )     return "刺刀座";
+    if( key == "magnifier" )       return "变焦器";
+    if( key == "dampening" )       return "减震";
+    return key;
+}
+
+// 命中档位（missed_by 越小越好）
+inline const char *hit_tier( double missed_by )
+{
+    if( missed_by >= 1.0 ) return "脱靶";
+    if( missed_by >= 0.8 ) return "擦伤（伤害5%~25%）";
+    if( missed_by >= 0.5 ) return "普通";
+    if( missed_by >= 0.2 ) return "好击";
+    if( missed_by >= 0.1 ) return "暴击";
+    return "爆头";
+}
+
+// 瞄准档位名（对应游戏里的 Regular / Careful / Precise）
+inline const char *AIM_LEVEL_1 = "普通档";
+inline const char *AIM_LEVEL_2 = "仔细档";
+inline const char *AIM_LEVEL_3 = "精准档";
+inline const char *AIM_LEVEL_0 = "完全没瞄";
+
+// =============================================================================
+//  二、标题与表头
+// =============================================================================
+namespace t {
+
+inline const char *RULE          = "==================================================\n";
+inline const char *TITLE         = " 枪械数学模型（公式复刻自游戏源码）\n";
+inline const char *TITLE_SUB     = " 参考文件：character.cpp / ranged.cpp / item_gun_tool_ammo.cpp\n";
+
+// ---- 枪械有效数据 ----
+inline const char *HDR_GUN       = "\n================= 枪械有效数据 =================\n";
+inline const char *LBL_SKILL     = "  技能             : ";
+inline const char *LBL_WEIGHT    = "  重量             : ";
+inline const char *LBL_VOLUME    = "  体积             : ";
+inline const char *LBL_DISP_RAW  = "  枪基础散布(原始) : ";
+inline const char *LBL_DISP_REAL = "  枪基础散布(实际) : ";
+inline const char *NOTE_DIV18    = "   （原始值 ÷ 18）\n";
+inline const char *LBL_SIGHT     = "  铁瞄散布         : ";
+inline const char *NOTE_NO_DIV18 = "  （不除以 18）\n";
+inline const char *LBL_HANDLING  = "  操控性           : ";
+inline const char *LBL_AMMO      = "  弹药             : ";
+inline const char *LBL_AMMO_SEP  = "  （后坐 ";
+inline const char *LBL_AMMO_SEP2 = "，散布 ";
+inline const char *BR_CLOSE      = "）\n";
+inline const char *HDR_MODS      = "\n  --- 安装的配件 ---\n";
+inline const char *NO_MODS       = "    (无)\n";
+inline const char *F_SLOT        = " 槽位=";
+inline const char *F_HANDLING    = " 操控+";
+inline const char *F_AIM         = " 瞄准+";
+inline const char *F_SIGHTDISP   = " 散布=";
+inline const char *F_FOV         = " 视野=";
+
+// ---- 瞄准参数 ----
+inline const char *HDR_AIMPARAM  = "\n  --- 瞄准参数（人物 敏捷 ";
+inline const char *HDR_AIMPARAM2 = " / 感知 ";
+inline const char *HDR_AIMPARAM3 = " / 技能 ";
+inline const char *HDR_AIMPARAM4 = "）---\n";
+inline const char *LBL_HIPLIMIT  = "    腰射极限            : ";
+inline const char *LBL_AIMLIMIT  = "    瞄准精度上限        : ";
+inline const char *LBL_VOLFACT   = "    体积因子            : ";
+inline const char *NOTE_VOLFACT  = "   （体积 >800毫升时再乘 (800÷体积) 的立方根）\n";
+inline const char *LBL_LENFACT   = "    长度因子(空旷/贴墙) : ";
+inline const char *SEP_SLASH     = " / ";
+inline const char *LBL_TOTDISP   = "    总散布(含技能惩罚)  : ";
+inline const char *LBL_SHOTREC   = "    单发后坐            : ";
+inline const char *NOTE_BIPOD    = "   （两脚架架设时 ";
+inline const char *LBL_ADDREC    = "    每发增加的瞄准误差  : ";
+inline const char *NOTE_ABSORB   = "   （技能吸收 ";
+inline const char *PCT_CLOSE     = "%）\n";
+
+// ---- 瞄准时间线 ----
+inline const char *HDR_AIMTIME   = "\n================= 瞄准时间线 =================\n";
+inline const char *NOTE_AIMTIME  = "  （从瞄准误差 3000 开始，每消耗 1 点行动力降低一次）\n\n";
+inline const char *C_SKILL       = "枪械技能";
+inline const char *C_TO_1        = "到普通档";
+inline const char *C_TO_2        = "到仔细档";
+inline const char *C_TO_3        = "到精准档";
+inline const char *C_AFTER_TURN  = "一回合(100点)后";
+inline const char *U_AP          = " 行动点";
+inline const char *LBL_THRESHOLD = "\n  档位阈值: 普通 ";
+inline const char *LBL_THRESH2   = "  /  仔细 ";
+inline const char *LBL_THRESH3   = "  /  精准 ";
+inline const char *LBL_TURNDROP  = "  一回合降幅: ";
+inline const char *ARROW_OPEN    = "  （3000 → ";
+inline const char *ARROW_CLOSE   = "）\n";
+
+// ---- 散布 → 命中影响 ----
+inline const char *HDR_DISPIMP   = "\n================= 散布 → 命中影响 =================\n";
+inline const char *SUB_DISPIMP   = "  散布值 → 50% 好击距离\n\n";
+inline const char *OVER_TABLE    = "超出表格（59 格，最大视野）";
+inline const char *U_TILE        = " 格";
+inline const char *HDR_INSTANCE  = "\n  实例：瞄到各档位后的表现（目标体积按 1.0 格的人形怪计算）\n\n";
+inline const char *C_AIMLEVEL    = "瞄准程度";
+inline const char *C_RECOIL      = "瞄准误差";
+inline const char *C_TOTDISP     = "总散布";
+inline const char *C_50RANGE     = "50%好击距离";
+inline const char *HDR_TIER      = "\n  命中档位 vs 距离（分别用各档的总散布；距离越远越差）\n\n";
+inline const char *C_RANGE       = "距离";
+inline const char *NOTE_TIER     = "\n  （精准档总散布 = ";
+inline const char *NOTE_TIER2    =
+    "；命中判定：未命中度 = 横向偏移 ÷ 目标体积，"
+    "横向偏移 = tan(误差角÷2) × 距离 × 2，见源码 ballistics.cpp 第 224 行）\n";
+
+// ---- 配件库 ----
+inline const char *HDR_CATALOG   = "\n================= 配件库 =================\n";
+inline const char *C_NAME        = "名称";
+inline const char *C_SLOT        = "槽位";
+inline const char *C_HANDLING    = "操控+";
+inline const char *C_AIM         = "瞄准+";
+inline const char *C_DISP        = "散布";
+inline const char *C_FOV         = "视野";
+
+// ---- 装配对话框 ----
+inline const char *SLOTS_LINE    =
+    "\n  可安装槽位: 导轨 / 瞄具 / 管下 / 枪口 / 枪托 / 枪托配件 / 枪管 / 机械\n";
+inline const char *SLOTS_NOTE    =
+    "  （M4A1 没有原生的导轨/瞄具/管下/枪口槽位 —— 那些由已安装的 .223 上机匣提供）\n";
+inline const char *MODLIST_HDR   =
+    "\n  配件列表（输入编号加入；直接回车结束；同槽位会自动替换，因为一个槽位只能装一件）：\n";
+inline const char *PROMPT_MODID  = "\n  编号> ";
+inline const char *ADDED         = "    + ";
+inline const char *REPLACED      = "  (替换了同槽位的旧配件)";
+inline const char *OUT_OF_RANGE  = "    编号超出范围\n";
+// 装配对话框里的列标签（与上面 F_* 的写法略有不同，故单独列出）
+inline const char *DLG_HANDLING  = " 操控";
+inline const char *DLG_AIM       = "  瞄准";
+inline const char *DLG_DISP      = "  散布";
+inline const char *DLG_FOV       = "  视野";
+
+// ---- 主流程 ----
+inline const char *PROMPT_PICK   = "\n选择枪械：";   // 注意：pick() 会自行补一个换行
+inline const char *PROMPT_SEL    = "  选择> ";
+inline const char *HDR_AMMO      = "\n选择弹药：\n";
+inline const char *LBL_AMMO_REC  = " 后坐 ";
+inline const char *LBL_AMMO_DISP = "   散布 ";
+inline const char *HDR_CHAR      =
+    "\n---- 人物属性（直接回车使用方括号里的默认值）----\n";
+inline const char *P_SKILL_LV    = "技能等级 [0]: ";
+inline const char *P_GUNSKILL    = "  枪械技能等级 [0]: ";
+inline const char *P_DEX         = "  敏捷 [8]: ";
+inline const char *P_PER         = "  感知 [8]: ";
+inline const char *P_STR         = "  力量 [8]: ";
+inline const char *DONE          = "\n完成。按回车退出。";
+
+} // namespace t
+
+} // namespace zh
