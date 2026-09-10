@@ -330,11 +330,26 @@ def main():
             no_disp.append(oid)
         name_zh, name_en = tr.name_of(r)
         aliases_zh, aliases_en = [], []
-        for v in (r.get("variants") or []):
-            if not isinstance(v, dict):
-                continue
+
+        # DDA 的变体机制：如果某个变体的 id 与条目 id 相同，它就是这把枪的
+        # 正式名（条目自身的 name 反而是通用称呼，如 "Glock pistol"）。
+        # 例如 glock_20 的变体里有 id="glock_20" / name="Glock 20 pistol"。
+        variants = [v for v in (r.get("variants") or []) if isinstance(v, dict)]
+        primary_zh, primary_en = None, None
+        for v in variants:
+            if v.get("id") == oid:
+                primary_zh, primary_en = tr.name_of(v)
+                break
+        if primary_en:
+            # 条目自身的名字降级为别名
+            if name_en and name_en != primary_en:
+                aliases_en.append(name_en)
+                aliases_zh.append(name_zh)
+            name_zh, name_en = primary_zh, primary_en
+
+        for v in variants:
             vz, ve = tr.name_of(v)
-            if ve:
+            if ve and ve != name_en:
                 aliases_en.append(ve)
                 aliases_zh.append(vz)
         n_alias += len(aliases_en)

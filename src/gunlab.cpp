@@ -642,13 +642,92 @@ static double read_number(const std::string& prompt, double def)
     try { return std::stod(s); } catch (...) { return def; }
 }
 
-static int pick(const std::string& prompt, int count)
+// ---- 搜索 -------------------------------------------------------------------
+// 大小写不敏感的子串匹配（对中文无影响，对英文型号名有用）
+static bool icontains(const std::string& hay, const std::string& needle)
 {
-    std::cout << prompt << "\n";
-    for (int i = 0; i < count; i++) std::cout << "    " << i << ") " << g_guns[i].name << "\n";
-    int v = (int)read_number(zh::t::PROMPT_SEL, 0);
-    if (v < 0 || v >= count) v = 0;
-    return v;
+    if (needle.empty()) return true;
+    if (hay.size() < needle.size()) return false;
+    for (size_t i = 0; i + needle.size() <= hay.size(); i++) {
+        bool ok = true;
+        for (size_t j = 0; j < needle.size(); j++) {
+            if (std::tolower((unsigned char)hay[i + j]) !=
+                std::tolower((unsigned char)needle[j])) { ok = false; break; }
+        }
+        if (ok) return true;
+    }
+    return false;
+}
+
+// 一把枪的全部可搜索名字：id / 中文名 / 英文名 / 变体别名（中英）
+static std::vector<std::string> gun_search_keys(const Gun& g)
+{
+    std::vector<std::string> keys;
+    keys.push_back(g.id);
+    keys.push_back(g.name);
+    keys.push_back(g.name_en);
+    for (auto& s : g.aliases)    keys.push_back(s);
+    for (auto& s : g.aliases_en) keys.push_back(s);
+    return keys;
+}
+
+static std::vector<int> search_guns(const std::string& kw)
+{
+    std::vector<int> hits;
+    for (size_t i = 0; i < g_guns.size(); i++) {
+        for (auto& k : gun_search_keys(g_guns[i])) {
+            if (icontains(k, kw)) { hits.push_back((int)i); break; }
+        }
+    }
+    return hits;
+}
+
+// ---- 弹药 -------------------------------------------------------------------
+// 枪的有效口径 = 自身声明的 + 已装配件提供的
+// （模块化枪械，如 M4A1，自身 ammo 是 NULL，口径由 .223 上机匣提供）
+static std::vector<std::string> effective_ammo_types(const Gun& g)
+{
+    std::vector<std::string> t = g.ammo_types;
+    for (auto& m : g.mods) {
+        for (auto& a : m.ammo_modifier) {
+            if (std::find(t.begin(), t.end(), a) == t.end()) t.push_back(a);
+        }
+    }
+    return t;
+}
+
+// 该枪可用的全部弹药
+static std::vector<int> ammo_for_gun(const Gun& g)
+{
+    std::vector<std::string> types = effective_ammo_types(g);
+    std::vector<int> out;
+    for (size_t i = 0; i < g_ammo.size(); i++) {
+        for (auto& t : types) {
+            if (g_ammo[i].ammo_type == t) { out.push_back((int)i); break; }
+        }
+    }
+    return out;
+}
+
+// 该枪的"标准弹"。
+// 口径名和弹药 id 不一定对应（如口径 "9x19mm" 对应 id "9mm_fmj"），
+// 所以按优先级找：id 完全等于口径 → id 含 "fmj" → 该口径下第一种子弹。
+// 选 FMJ 是因为它是各口径下最常见的基准弹。
+static const Ammo* pick_default_ammo(const Gun& g)
+{
+    for (auto& t : effective_ammo_types(g)) {
+        const Ammo* first = nullptr;
+        const Ammo* fmj   = nullptr;
+        for (auto& a : g_ammo) {
+            if (a.ammo_type != t) continue;
+            if (!first) first = &a;
+            if (a.id == t) return &a;
+            if (!fmj && icontains(a.id, "fmj")) fmj = &a;
+        }
+        if (fmj)   return fmj;
+        if (first) return first;
+    }
+    return nullptr;
 }
 
 static void equip_dialog(Gun& g)
@@ -691,6 +770,204 @@ static void equip_dialog(Gun& g)
     }
 }
 
+// ---- 人物属性 ---------------------------------------------------------------
+static Character ask_character()
+{
+    using namespace zh::t;
+    Character ch;
+    std::cout << HDR_CHAR;
+    ch.skill_level        = read_number("  武器技能等级 [0]: ", 0);
+    ch.marksmanship_level = read_number(P_GUNSKILL, 0);
+    ch.dex                = read_number(P_DEX, 8);
+    ch.per                = read_number(P_PER, 8);
+    ch.str                = read_number(P_STR, 8);
+    ch.skill_level        = std::max(0.0, std::min(ch.skill_level, double(MAX_SKILL)));
+    ch.marksmanship_level = std::max(0.0, std::min(ch.marksmanship_level, double(MAX_SKILL)));
+    if (ch.dex < 1) ch.dex = 8;
+    if (ch.per < 1) ch.per = 8;
+    if (ch.str < 1) ch.str = 8;
+    return ch;
+}
+
+// ---- 搜索选枪：返回下标，用户取消返回 -1 -------------------------------------
+static const int MAX_SHOW = 30;
+
+static int ui_pick_gun()
+{
+    using namespace zh::t;
+    char buf[256];
+    while (true) {
+        std::cout << SEARCH_PROMPT;
+        const std::string kw = read_line("", "");
+        if (kw.empty()) return -1;
+
+        const std::vector<int> hits = search_guns(kw);
+        if (hits.empty()) { std::cout << SEARCH_NONE; continue; }
+
+        std::snprintf(buf, sizeof(buf), SEARCH_HITS, (int)hits.size());
+        std::cout << buf;
+        const int n = std::min((int)hits.size(), MAX_SHOW);
+        for (int i = 0; i < n; i++)
+            std::cout << "    " << pad(std::to_string(i), 4)
+                      << pad(g_guns[hits[i]].name, 30) << "  " << g_guns[hits[i]].id << "\n";
+        if ((int)hits.size() > n) {
+            std::snprintf(buf, sizeof(buf), SEARCH_MORE, (int)hits.size() - n);
+            std::cout << buf;
+        }
+        const int v = (int)read_number(PROMPT_SEL, -1);
+        if (v >= 0 && v < n) return hits[v];
+        std::cout << SEARCH_BAD;
+    }
+}
+
+// ---- 选弹药（只列该枪可用的）-------------------------------------------------
+static const Ammo* ui_pick_ammo(const Gun& g)
+{
+    using namespace zh::t;
+    const std::vector<int> list = ammo_for_gun(g);
+    if (list.empty()) {
+        std::cout << CMP_NO_AMMO << "\n";
+        return nullptr;
+    }
+    std::cout << HDR_AMMO;
+    for (size_t i = 0; i < list.size(); i++) {
+        const Ammo& a = g_ammo[list[i]];
+        std::cout << "    " << pad(std::to_string(i), 4) << pad(a.name, 26)
+                  << LBL_AMMO_REC << (int)a.recoil << LBL_AMMO_DISP << (int)a.dispersion << "\n";
+    }
+    int v = (int)read_number(PROMPT_SEL, 0);
+    if (v < 0 || v >= (int)list.size()) v = 0;
+    return &g_ammo[list[v]];
+}
+
+// ---- 对比表 ------------------------------------------------------------------
+static void print_compare_table(const std::vector<int>& sel, const Character& base_ch)
+{
+    using namespace zh::t;
+    if (sel.empty()) { std::cout << CMP_EMPTY; return; }
+
+    std::cout << CMP_TITLE;
+    char buf[256];
+    std::snprintf(buf, sizeof(buf), CMP_ASSUME, base_ch.skill_level,
+                  base_ch.marksmanship_level, base_ch.dex, base_ch.per);
+    std::cout << buf;
+
+    std::cout << "\n  " << pad(CMP_HEAD_GUN, 26) << pad(CMP_HEAD_SKILL, 8)
+              << pad(CMP_HEAD_AMMO, 24) << pad(CMP_HEAD_DISP, 9) << pad(CMP_HEAD_SIGHT, 10)
+              << pad(CMP_HEAD_HAND, 7) << pad(CMP_HEAD_W, 10) << pad(CMP_HEAD_V, 10)
+              << pad(CMP_HEAD_REC, 11) << CMP_HEAD_AIM << "\n";
+    std::cout << "  " << std::string(120, '-') << "\n";
+
+    for (int gi : sel) {
+        const Gun& g = g_guns[gi];
+        const Ammo* a = pick_default_ammo(g);
+
+        // 每把枪的技能名不同，所以按枪覆盖 gun_skill
+        Character ch = base_ch;
+        ch.gun_skill = g.skill;
+
+        AimContext ctx; ctx.len_factor = 1.0;
+        const AimResult r = simulate_aim(g, ch, ctx);
+
+        const std::string rec = a
+            ? std::to_string((int)added_recoil_per_shot(gun_recoil(g, ch.str, a->recoil),
+                                                        recoil_absorb(ch.skill_level)))
+            : "—";
+
+        std::cout << "  " << pad(g.name, 26) << pad(zh::skill(g.skill), 8)
+                  << pad(a ? a->name : std::string(CMP_NO_AMMO), 24)
+                  << pad(std::to_string((int)gun_dispersion(g, a)), 9)
+                  << pad(std::to_string((int)g.sight_dispersion), 10)
+                  << pad(std::to_string((int)g.handling), 7)
+                  << pad(std::to_string((int)g.weight_g) + " g", 10)
+                  << pad(std::to_string((int)g.volume_ml) + " ml", 10)
+                  << pad(rec, 11)
+                  << (r.moves_to_regular >= 0 ? std::to_string(r.moves_to_regular) + " 行动点" : "—")
+                  << "\n";
+    }
+    std::cout << CMP_NOTE;
+}
+
+// ---- 界面：对比模式 ----------------------------------------------------------
+static void ui_compare()
+{
+    using namespace zh::t;
+    Character ch = ask_character();
+    std::vector<int> sel;
+    char buf[256];
+    while (true) {
+        std::cout << SEARCH_PROMPT;
+        const std::string kw = read_line("", "");
+        if (kw.empty()) break;
+
+        const std::vector<int> hits = search_guns(kw);
+        if (hits.empty()) { std::cout << SEARCH_NONE; continue; }
+
+        std::snprintf(buf, sizeof(buf), SEARCH_HITS, (int)hits.size());
+        std::cout << buf;
+        const int n = std::min((int)hits.size(), MAX_SHOW);
+        for (int i = 0; i < n; i++)
+            std::cout << "    " << pad(std::to_string(i), 4)
+                      << pad(g_guns[hits[i]].name, 30) << "  " << g_guns[hits[i]].id << "\n";
+        if ((int)hits.size() > n) {
+            std::snprintf(buf, sizeof(buf), SEARCH_MORE, (int)hits.size() - n);
+            std::cout << buf;
+        }
+
+        std::cout << SEARCH_PICK;
+        const std::string picks = read_line("", "");
+        if (picks.empty()) continue;
+
+        // 解析逗号分隔的编号
+        std::stringstream ss(picks);
+        std::string tok;
+        while (std::getline(ss, tok, ',')) {
+            try {
+                const int v = std::stoi(tok);
+                if (v >= 0 && v < n) {
+                    const int gi = hits[v];
+                    if (std::find(sel.begin(), sel.end(), gi) == sel.end()) {
+                        sel.push_back(gi);
+                        std::cout << SEARCH_ADDED << g_guns[gi].name << "\n";
+                    }
+                } else {
+                    std::cout << SEARCH_BAD;
+                }
+            } catch (...) { /* 忽略无法解析的片段 */ }
+        }
+    }
+    print_compare_table(sel, ch);
+}
+
+// ---- 界面：单枪详情 ----------------------------------------------------------
+static void ui_detail()
+{
+    using namespace zh::t;
+    const int gi = ui_pick_gun();
+    if (gi < 0) return;
+
+    Gun gun = g_guns[gi];
+    equip_dialog(gun);
+
+    const Ammo* ammo = ui_pick_ammo(gun);
+    if (!ammo) {
+        std::cout << "  （这把枪没有可用弹药，可能需要在游戏里先装上机匣）\n";
+        return;
+    }
+
+    Character ch = ask_character();
+    ch.gun_skill = gun.skill;
+
+    print_gun_summary(gun, ch, ammo);
+    print_aim_timeline(gun, ch, ammo);
+    print_dispersion_impact(gun, ch, ammo);
+    print_mod_catalog();
+}
+
+// =============================================================================
+//  主程序
+// =============================================================================
+
 int main()
 {
 #ifdef _WIN32
@@ -703,38 +980,16 @@ int main()
     using namespace zh::t;
 
     std::cout << RULE << TITLE << TITLE_SUB << RULE;
+    std::cout << "  数据库：" << g_guns.size() << " 把枪 / "
+              << g_ammo.size() << " 种弹药 / " << g_mods.size() << " 个配件\n";
 
-    Gun gun = g_guns[pick(PROMPT_PICK, (int)g_guns.size())];
-
-    std::cout << HDR_AMMO;
-    for (size_t i = 0; i < g_ammo.size(); i++)
-        std::cout << "    " << i << ") " << pad(g_ammo[i].name, 20)
-                  << LBL_AMMO_REC << (int)g_ammo[i].recoil
-                  << LBL_AMMO_DISP << (int)g_ammo[i].dispersion << "\n";
-    int ai = (int)read_number(PROMPT_SEL, 0);
-    if (ai < 0 || ai >= (int)g_ammo.size()) ai = 0;
-    const Ammo* ammo = &g_ammo[ai];
-
-    equip_dialog(gun);
-
-    Character ch;
-    ch.gun_skill = gun.skill;
-    std::cout << HDR_CHAR;
-    ch.skill_level        = read_number("  " + zh::skill(gun.skill) + P_SKILL_LV, 0);
-    ch.marksmanship_level = read_number(P_GUNSKILL, 0);
-    ch.dex                = read_number(P_DEX, 8);
-    ch.per                = read_number(P_PER, 8);
-    ch.str                = read_number(P_STR, 8);
-    ch.skill_level        = std::max(0.0, std::min(ch.skill_level, double(MAX_SKILL)));
-    ch.marksmanship_level = std::max(0.0, std::min(ch.marksmanship_level, double(MAX_SKILL)));
-    if (ch.dex < 1) ch.dex = 8;
-    if (ch.per < 1) ch.per = 8;
-    if (ch.str < 1) ch.str = 8;
-
-    print_gun_summary(gun, ch, ammo);
-    print_aim_timeline(gun, ch, ammo);
-    print_dispersion_impact(gun, ch, ammo);
-    print_mod_catalog();
+    while (true) {
+        std::cout << MODE_PROMPT << MODE_1 << MODE_2 << MODE_0;
+        const int m = (int)read_number(PROMPT_SEL, 0);
+        if (m == 1)      ui_compare();
+        else if (m == 2) ui_detail();
+        else             break;
+    }
 
     std::cout << DONE;
     std::string dummy;

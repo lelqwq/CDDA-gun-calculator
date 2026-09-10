@@ -184,6 +184,43 @@ inline const char *DLG_AIM       = "  瞄准";
 inline const char *DLG_DISP      = "  散布";
 inline const char *DLG_FOV       = "  视野";
 
+// ---- 模式选择 ----
+inline const char *MODE_PROMPT   = "\n请选择功能：\n";
+inline const char *MODE_1        = "  1) 搜索并对比枪械\n";
+inline const char *MODE_2        = "  2) 单枪详情分析\n";
+inline const char *MODE_0        = "  0) 退出\n";
+
+// ---- 搜索 ----
+inline const char *SEARCH_PROMPT = "\n输入关键词（匹配中文名 / 英文名 / id / 变体别名）\n  直接回车返回上级：";
+inline const char *SEARCH_NONE   = "  没有匹配的枪械。\n";
+inline const char *SEARCH_HITS   = "\n  匹配到 %d 把：\n";
+inline const char *SEARCH_PICK   =
+    "\n  输入编号加入对比列表（可用逗号分隔多个，如 0,3,5）\n  直接回车结束：";
+inline const char *SEARCH_ADDED  = "    已加入：";
+inline const char *SEARCH_BAD    = "    编号超出范围\n";
+inline const char *SEARCH_MORE    = "  ...（还有 %d 把未列出，请用更具体的关键词）\n";
+
+// ---- 对比表 ----
+inline const char *CMP_TITLE     = "\n================= 枪械对比 =================\n";
+inline const char *CMP_ASSUME    =
+    "  假设：武器技能 %g / 枪械技能 %g / 敏捷 %g / 感知 %g；目标体积 1.0 格\n";
+inline const char *CMP_EMPTY     = "  对比列表为空。\n";
+inline const char *CMP_HEAD_GUN  = "枪械";
+inline const char *CMP_HEAD_SKILL= "技能";
+inline const char *CMP_HEAD_AMMO = "弹药";
+inline const char *CMP_HEAD_DISP = "枪散布";
+inline const char *CMP_HEAD_SIGHT= "瞄具散布";
+inline const char *CMP_HEAD_HAND = "操控";
+inline const char *CMP_HEAD_W    = "重量";
+inline const char *CMP_HEAD_V    = "体积";
+inline const char *CMP_HEAD_REC  = "每发+误差";
+inline const char *CMP_HEAD_AIM  = "瞄到普通档";
+inline const char *CMP_NOTE      =
+    "  注：「每发+误差」= 开一枪后瞄准误差的增加量（含枪械技能吸收），"
+    "按每把枪各自的标准弹药计算（见「弹药」列）。\n"
+    "      不同口径之间这一列不可直接横向比较。\n";
+inline const char *CMP_NO_AMMO   = "（无适配弹药）";
+
 // ---- 主流程 ----
 inline const char *PROMPT_PICK   = "\n选择枪械：";   // 注意：pick() 会自行补一个换行
 inline const char *PROMPT_SEL    = "  选择> ";
