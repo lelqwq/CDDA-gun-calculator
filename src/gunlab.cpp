@@ -631,6 +631,30 @@ static void print_gun_summary(const Gun& g, const Character& c, const Ammo* ammo
     std::cout << GV_THEO << min_rec
               << GV_STR_REQ << (int)(gun_base_weight(g) / 333.0) << GV_STR_END << NL;
     std::cout << NOTE_THEO_1 << NOTE_THEO_2;
+
+    // 瞄准等级 —— 对应游戏里的 GUN_AIMING_STATS（0.I: item.cpp:3432）
+    // 每档列出「50%命中距离」与「瞄准用时」，两者分别来自
+    // range_with_even_chance_of_good_hit() 和 gun_engagement_moves()
+    AimContext ctx;
+    ctx.len_factor = 1.0;
+    const AimResult ar = simulate_aim(g, c, ctx);
+    const double fixed_disp = get_weapon_dispersion(g, c, ammo);
+
+    std::cout << HDR_AIMLEVELS;
+    std::cout << "      " << pad(LV_AIMLEVEL, 10) << pad(LV_50RANGE, 16) << LV_AIMTIME << NL;
+
+    const struct { const char* name; double thr; int mv; } lvs[] = {
+        { zh::AIM_LEVEL_1, ar.regular_th, ar.moves_to_regular },
+        { zh::AIM_LEVEL_2, ar.careful_th, ar.moves_to_careful },
+        { zh::AIM_LEVEL_3, ar.precise_th, ar.moves_to_precise },
+    };
+    for (auto& lv : lvs) {
+        const int rng = range_with_even_chance_of_good_hit(fixed_disp + lv.thr);
+        std::cout << "      " << pad(lv.name, 10)
+                  << pad(rng >= 59 ? std::string("59+") : (std::to_string(rng) + " 格"), 16)
+                  << lv.mv << LV_AP << NL;
+    }
+    std::cout << NOTE_AIMLEVEL;
 }
 
 static void print_aim_timeline(const Gun& g, const Character& c, const Ammo* ammo)

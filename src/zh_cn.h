@@ -231,6 +231,16 @@ inline const char *NOTE_THEO_1  =
 inline const char *NOTE_THEO_2  =
     "          与实际后坐相等 = 你的力量已经够了；更大 = 力量不足，后坐被放大\n";
 
+// 瞄准等级 —— 游戏物品界面里每个瞄准档位也会列出这两项
+inline const char *HDR_AIMLEVELS = "\n    瞄准等级（游戏物品界面里每档也会列出这两项）\n";
+inline const char *LV_AIMLEVEL   = "瞄准等级";
+inline const char *LV_50RANGE    = "50%命中距离";
+inline const char *LV_AIMTIME    = "瞄准用时";
+inline const char *LV_AP         = " 行动点";
+inline const char *NOTE_AIMLEVEL =
+    "        └ 50%命中距离 = 在这个距离上约有一半概率打出「好击」\n"
+    "          瞄准用时   = 从完全没瞄压到这一档要花多少行动点（1 回合 = 100 点）\n";
+
 // ---- 对比表 ----
 inline const char *CMP_TITLE     = "\n================= 枪械对比 =================\n";
 inline const char *CMP_ASSUME    =
