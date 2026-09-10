@@ -4,7 +4,8 @@ REM  scripts\build_msvc.bat - Build gunlab with MSVC (Visual Studio)
 REM  (ASCII only on purpose: cmd.exe uses the OEM codepage, not UTF-8)
 REM ============================================================================
 setlocal
-cd /d "%~dp0.."          REM switch to the project root
+REM switch to the project root (%~dp0 ends with a backslash)
+cd /d "%~dp0.."
 
 set "VS=C:\Program Files\Microsoft Visual Studio\18\Community"
 if not exist "%VS%\VC\Auxiliary\Build\vcvars64.bat" (

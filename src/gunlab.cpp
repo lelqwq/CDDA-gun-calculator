@@ -54,6 +54,10 @@ static std::vector<std::string> effective_ammo_types( const Gun &g );
 static double effective_weight( const Gun &g );
 static double effective_volume( const Gun &g );
 
+// 枪管长度插值（定义在第 3.8c 节，但 3.8b 的游戏显示值要用到）
+static double effective_barrel_length( const Gun &g );
+static double dispersions_considering_length( const Ammo &ammo, double barrel_length_mm );
+
 // =============================================================================
 //  第 1 部分：数学工具
 // =============================================================================
@@ -249,15 +253,31 @@ static double aim_per_move(const Gun& g, const Character& c, double recoil, cons
     return aim_speed * ctx.enchant;
 }
 
+// item::gun_base_weight()  item.cpp —— 枪自身 + 带口径的配件（上机匣）
+// 后坐计算用的是这个，不是整枪重量；枪托/瞄具不参与
+static double gun_base_weight(const Gun& g)
+{
+    double w = g.weight_g;
+    for (auto& m : g.mods) {
+        if (!m.ammo_modifier.empty()) w += m.weight_g;
+    }
+    return w;
+}
+
 // ---- 3.8 开一枪加多少后坐  item_gun_tool_ammo.cpp:1316 ----------------------
 static int gun_recoil(const Gun& g, double arm_str, double ammo_recoil,
                       bool bipod = false, bool ideal_strength = false)
 {
     if (ammo_recoil <= 0) return 0;   // 没有弹药就没有后坐（DDA 的后坐全部来自弹药）
 
+    // ★ 注意这里用的是 gun_base_weight 而不是整枪重量：
+    //   item.cpp:gun_base_weight() = 枪自身重量 + 带口径的配件（上机匣）的重量，
+    //   不含枪托、瞄具等其它配件。
+    //   近似：用配件的 weight 代替 integral_weight（上机匣两者相同）。
+    const double bw = gun_base_weight(g);
     const double wt = ideal_strength
-                    ? effective_weight(g) / 333.0
-                    : std::min(effective_weight(g), arm_str * 333.0) / 333.0;
+                    ? bw / 333.0
+                    : std::min(bw, arm_str * 333.0) / 333.0;
 
     double handling = g.handling;
     for (auto& m : g.mods) {
@@ -283,39 +303,83 @@ static double recoil_absorb(double skill)
     return std::min(skill, double(MAX_SKILL)) / 20.0;
 }
 
-// ---- 3.8b 游戏界面显示的数值  item_info.cpp:1252/1270/1287/1297 ---------------
-// 游戏物品界面里的枪械数值一律是「内部值 ÷ 100」，而且散布不除以
-// GUN_DISPERSION_DIVIDER。所以它和 gunlab 里参与公式的值不是一个刻度。
+// ---- 3.8b 游戏界面显示的数值  0.I: src/item.cpp:3287/3313/3340 ---------------
+// 0.I 稳定版的物品界面显示的是**原始内部值**（不除以 100），且散布是分项相加：
+//     散布: <枪身散布>+<弹药散布（按枪管长度插值）> = <总和>
+//     瞄准散布: <瞄具散布>+<视差> = <有效散布>
+//     实际后坐: <gun_recoil(角色)>
 // 这几个函数专门用来和游戏界面对照 —— 数字一样就说明整条链路没出错。
-static double game_dispersion_moa(const Gun& g, const Ammo* ammo)
+//
+// 注：0.J 开发版把这里改成了单值并除以 100（item_info.cpp:1252），
+//     所以拿 0.J 的界面数字来比会对不上。gunlab 对齐的是 0.I。
+static double game_dispersion_gun(const Gun& g)
 {
-    // 对应 item::gun_dispersion( with_ammo=true, with_scaling=false ) / 100
-    double raw = g.dispersion;
-    for (auto& m : g.mods) raw += m.dispersion_modifier;
-    if (ammo) raw += ammo->dispersion;
-    return raw / 100.0;
+    // item::gun_dispersion( with_ammo=false, with_scaling=false )
+    double v = g.dispersion;
+    for (auto& m : g.mods) v += m.dispersion_modifier;
+    return std::max(v, 0.0);
 }
-// 游戏显示的是"腰射极限"与"有效瞄具散布"中较小的那个（item_info.cpp:1269），
-// 正好就是瞄准精度上限。
-// 已知细微差异：DISABLE_SIGHTS 的枪，游戏仍用 300 参与计算有效瞄具散布
-// （item_gun_tool_ammo.cpp:1225），而 gunlab 直接跳过铁瞄。因为 300 远大于
-// 腰射极限，取 min 后结果一致，所以实际数字仍然对得上。
-static double game_sight_dispersion_moa(const Gun& g, const Character& c)
+static double game_dispersion_ammo(const Gun& g, const Ammo* ammo)
 {
-    return most_accurate_aiming_method_limit(g, c) / 100.0;
+    if (!ammo) return 0.0;
+    return dispersions_considering_length(*ammo, effective_barrel_length(g));
 }
-static double game_recoil_moa(const Gun& g, const Character& c, const Ammo* ammo)
+// item::sight_dispersion(character) —— 返回 (瞄具自身散布, 含视差的有效散布)
+static std::pair<int, int> sight_dispersion_pair(const Gun& g, const Character& c)
 {
-    return gun_recoil(g, c.str, ammo ? ammo->recoil : 0.0) / 100.0;
+    int act = g.disable_sights ? 300 : (int)g.sight_dispersion;
+    int eff = (int)effective_dispersion(c.per, c.vision, act, false);
+    for (auto& m : g.mods) {
+        if (m.sight_dispersion < 0 || m.field_of_view <= 0) continue;
+        const int e_act = (int)m.sight_dispersion;
+        const int e_eff = (int)effective_dispersion(c.per, c.vision, e_act, m.zoom);
+        if (eff > e_eff) { eff = e_eff; act = e_act; }
+    }
+    return std::make_pair(act, eff);
 }
-static double game_recoil_bipod_moa(const Gun& g, const Character& c, const Ammo* ammo)
+static double game_recoil(const Gun& g, const Character& c, const Ammo* ammo)
 {
-    return gun_recoil(g, c.str, ammo ? ammo->recoil : 0.0, true) / 100.0;
+    return gun_recoil(g, c.str, ammo ? ammo->recoil : 0.0);
 }
-static double game_min_recoil_moa(const Gun& g, const Character& c, const Ammo* ammo)
+static double game_recoil_bipod(const Gun& g, const Character& c, const Ammo* ammo)
 {
-    // 对应 gun_recoil( ..., bipod=true, ideal_strength=true ) / 100
-    return gun_recoil(g, c.str, ammo ? ammo->recoil : 0.0, true, true) / 100.0;
+    return gun_recoil(g, c.str, ammo ? ammo->recoil : 0.0, true);
+}
+static double game_min_recoil(const Gun& g, const Character& c, const Ammo* ammo)
+{
+    return gun_recoil(g, c.str, ammo ? ammo->recoil : 0.0, true, true);
+}
+
+// ---- 3.8c 枪管长度插值  cata_utility.cpp:267 / itype.cpp:462 ------------------
+// multi_lerp：按 points 的分段线性插值，两端钳制
+static double multi_lerp(const std::vector<std::pair<double, double>>& points, double x)
+{
+    if (points.empty()) return 0.0;
+    size_t i = 0;
+    while (i < points.size() && points[i].first <= x) i++;
+    if (i == 0) return points.front().second;
+    if (i >= points.size()) return points.back().second;
+    const double t = (x - points[i - 1].first) / (points[i].first - points[i - 1].first);
+    return t * points[i].second + (1.0 - t) * points[i - 1].second;
+}
+
+// item::barrel_length()：枪自身的枪管长度，没有就找第一个带枪管长度的配件
+// （模块化枪械的枪管长度来自上机匣）
+static double effective_barrel_length(const Gun& g)
+{
+    if (g.barrel_length_mm > 0.0) return g.barrel_length_mm;
+    for (auto& m : g.mods) {
+        if (m.barrel_length_mm > 0.0) return m.barrel_length_mm;
+    }
+    return 0.0;
+}
+
+// islot_ammo::dispersion_considering_length  itype.cpp:462
+// 弹药的散布随枪管长度变化：基准 dispersion + 插值修正
+static double dispersions_considering_length(const Ammo& ammo, double barrel_length_mm)
+{
+    if (ammo.disp_by_barrel.empty()) return ammo.dispersion;
+    return multi_lerp(ammo.disp_by_barrel, barrel_length_mm) + ammo.dispersion;
 }
 
 // ---- 3.9 散布合成 -----------------------------------------------------------
@@ -327,7 +391,8 @@ static double gun_dispersion(const Gun& g, const Ammo* ammo,
     for (auto& m : g.mods) sum += m.dispersion_modifier;
     sum += damage_level * DISPERSION_PER_GUN_DAMAGE;
     sum = std::max(sum, 0.0);
-    if (ammo) sum += ammo->dispersion;   // 简化：未做 barrel_length 插值
+    // 弹药散布按枪管长度插值  itype.cpp:462
+    if (ammo) sum += dispersions_considering_length(*ammo, effective_barrel_length(g));
 
     if (!with_scaling) return sum;
     sum = std::max(std::round(sum / GUN_DISPERSION_DIVIDER), 1.0);
@@ -555,16 +620,27 @@ static void print_gun_summary(const Gun& g, const Character& c, const Ammo* ammo
     std::cout << LBL_ADDREC << (int)added_recoil_per_shot(gr_hip, recoil_absorb(c.skill_level))
               << NOTE_ABSORB << std::setprecision(0) << recoil_absorb(c.skill_level) * 100 << PCT_CLOSE;
 
-    // 游戏界面显示值 —— 照着游戏里同一把枪的数值核对
+    // 游戏界面显示值 —— 照着游戏里同一把枪的数值核对（0.I 格式：分项相加）
     std::cout << HDR_GAMEVAL;
-    std::cout << std::fixed << std::setprecision(2);
-    std::cout << GV_DISP  << game_dispersion_moa(g, ammo) << GV_UNIT;
-    std::cout << GV_SIGHT << game_sight_dispersion_moa(g, c) << GV_UNIT;
-    std::cout << GV_RECOIL << game_recoil_moa(g, c, ammo) << GV_UNIT;
-    if (g.has_mod("underbarrel")) {
-        std::cout << GV_RECOIL_BIP << game_recoil_bipod_moa(g, c, ammo) << GV_UNIT;
+    const int d_gun  = (int)game_dispersion_gun(g);
+    const int d_ammo = (int)game_dispersion_ammo(g, ammo);
+    std::cout << GV_DISP << d_gun << GV_PLUS << d_ammo << GV_DISP_EQ << (d_gun + d_ammo) << NL;
+
+    const std::pair<int, int> sd = sight_dispersion_pair(g, c);
+    const int psl = (int)point_shooting_limit(c.skill(g.skill), g.skill == "archery");
+    if (psl <= sd.second) {
+        std::cout << GV_SIGHT_PS << psl << NL;
+    } else {
+        std::cout << GV_SIGHT << sd.first << GV_PLUS << (sd.second - sd.first)
+                  << GV_DISP_EQ << sd.second << NL;
     }
-    std::cout << GV_THEO << game_min_recoil_moa(g, c, ammo) << GV_UNIT;
+
+    std::cout << GV_RECOIL << (int)game_recoil(g, c, ammo) << NL;
+    if (g.has_mod("underbarrel")) {
+        std::cout << GV_RECOIL_BIP << (int)game_recoil_bipod(g, c, ammo) << NL;
+    }
+    std::cout << GV_THEO << (int)game_min_recoil(g, c, ammo)
+              << GV_STR_REQ << (int)(gun_base_weight(g) / 333.0) << GV_STR_END << NL;
 }
 
 static void print_aim_timeline(const Gun& g, const Character& c, const Ammo* ammo)
@@ -1017,13 +1093,12 @@ static void print_compare_table(const std::vector<int>& sel, const Character& ba
                                                         recoil_absorb(ch.skill_level)))
             : "—";
 
-        char gbuf[32];
-        std::snprintf(gbuf, sizeof(gbuf), "%.2f", game_dispersion_moa(g, a));
+        const int gdisp = (int)(game_dispersion_gun(g) + game_dispersion_ammo(g, a));
 
         std::cout << "  " << pad(g.name, 24) << pad(zh::skill(g.skill), 8)
                   << pad(a ? a->name : std::string(CMP_NO_AMMO), 22)
                   << pad(std::to_string((int)gun_dispersion(g, a)), 8)
-                  << pad(gbuf, 10)
+                  << pad(std::to_string(gdisp), 10)
                   << pad(std::to_string((int)g.sight_dispersion), 10)
                   << pad(std::to_string((int)g.handling), 6)
                   << pad(std::to_string((int)effective_weight(g)) + " g", 10)

@@ -201,16 +201,22 @@ inline const char *SEARCH_BAD    = "    编号超出范围\n";
 inline const char *SEARCH_MORE    = "  ...（还有 %d 把未列出，请用更具体的关键词）\n";
 
 // ---- 游戏内显示值（用于与游戏界面直接对照）----
+// 格式与 0.I 稳定版的物品界面一致：分项相加，显示的是原始内部值（不除以 100）
 inline const char *HDR_GAMEVAL   =
     "\n  --- 游戏内显示值 ---\n"
-    "  （以下是游戏物品界面里显示的数字，可直接照着核对；\n"
-    "    它们都是内部值 ÷ 100，与上面参与公式的数值不是一个刻度）\n";
-inline const char *GV_DISP       = "    散布 Dispersion            : ";
-inline const char *GV_SIGHT      = "    瞄准散布 Sight dispersion  : ";
-inline const char *GV_RECOIL     = "    实际后坐 Effective recoil  : ";
-inline const char *GV_RECOIL_BIP = "    两脚架架设时                : ";
-inline const char *GV_THEO       = "    理论最小后坐                : ";
-inline const char *GV_UNIT       = " MOA\n";
+    "  （以下是游戏物品界面显示的数字，格式与 0.I 稳定版一致。\n"
+    "    它们都是内部原始值，与上面参与公式的数值不是一个刻度）\n";
+inline const char *GV_DISP       = "    散布（枪身+弹药）  : ";
+inline const char *GV_DISP_EQ    = " = ";
+inline const char *GV_SIGHT      = "    瞄准散布（瞄具+视差）: ";
+inline const char *GV_SIGHT_PS   = "    瞄准散布（腰射）     : ";
+inline const char *GV_RECOIL     = "    实际后坐             : ";
+inline const char *GV_RECOIL_BIP = "    两脚架架设时         : ";
+inline const char *GV_THEO       = "    理论最小后坐力       : ";
+inline const char *GV_STR_REQ    = "（所需力量: ";
+inline const char *GV_STR_END    = "）";
+inline const char *GV_PLUS       = "+";
+inline const char *NL            = "\n";
 
 // ---- 对比表 ----
 inline const char *CMP_TITLE     = "\n================= 枪械对比 =================\n";

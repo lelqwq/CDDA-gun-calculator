@@ -68,7 +68,9 @@ void add_gun( const char *id, const char *name, const char *name_en, const char 
 }
 
 void add_ammo( const char *id, const char *name, const char *name_en, const char *ammo_type,
-               double recoil, double dispersion, double range, const char *source )
+               double recoil, double dispersion, double range,
+               std::initializer_list<std::pair<double, double>> disp_by_barrel,
+               const char *source )
 {
     Ammo a;
     a.id   = id ? id : "";
@@ -79,13 +81,14 @@ void add_ammo( const char *id, const char *name, const char *name_en, const char
     a.dispersion = dispersion;
     a.range      = range;
     a.source     = source ? source : "core";
+    a.disp_by_barrel.assign( disp_by_barrel.begin(), disp_by_barrel.end() );
     g_ammo.push_back( a );
 }
 
 void add_gunmod( const char *id, const char *name, const char *name_en, const char *location,
                  double handling_modifier, double dispersion_modifier, double aim_speed_modifier,
                  double sight_dispersion, double field_of_view,
-                 double weight_g, double volume_ml, bool bipod,
+                 double weight_g, double volume_ml, double barrel_length_mm, bool bipod,
                  bool laser_sight, bool zoom,
                  std::initializer_list<const char *> ammo_modifier,
                  std::initializer_list<const char *> mod_targets,
@@ -105,6 +108,7 @@ void add_gunmod( const char *id, const char *name, const char *name_en, const ch
     m.field_of_view       = field_of_view;
     m.weight_g            = weight_g;
     m.volume_ml           = volume_ml;
+    m.barrel_length_mm    = barrel_length_mm;
     m.bipod               = bipod;
     m.laser_sight         = laser_sight;
     m.zoom                = zoom;

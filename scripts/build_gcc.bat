@@ -4,7 +4,8 @@ REM  scripts\build_gcc.bat - Build gunlab with the MSYS2 MinGW-w64 g++
 REM  (ASCII only on purpose: cmd.exe uses the OEM codepage, not UTF-8)
 REM ============================================================================
 setlocal
-cd /d "%~dp0.."          REM switch to the project root
+REM switch to the project root (%~dp0 ends with a backslash)
+cd /d "%~dp0.."
 
 set "MINGW=C:\msys64\mingw64\bin"
 if not exist "%MINGW%\g++.exe" (

@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <initializer_list>
 #include <string>
+#include <utility>
 #include <vector>
 
 // =============================================================================
@@ -53,6 +54,7 @@ struct GunMod {
     double      field_of_view       = -1.0;
     double      weight_g            = 0.0;   // 装上后给枪增加的重量
     double      volume_ml           = 0.0;   // 装上后给枪增加的体积
+    double      barrel_length_mm    = 0.0;   // 上机匣提供的枪管长度
     bool        bipod               = false; // BIPOD flag：只在架设时计入 handling
     bool        laser_sight         = false; // LASER_SIGHT flag：受光照/距离限制
     bool        zoom                = false; // ZOOM flag：视差减到 1/4
@@ -73,6 +75,11 @@ struct Ammo {
     double      recoil     = 0.0;      // ★ DDA 的后坐全部来自弹药
     double      dispersion = 0.0;
     double      range      = 0.0;
+
+    // 散布随枪管长度的修正表 { 枪管长度mm, 修正值 }，递增排列。
+    // 对应 JSON 的 "dispersion_modifier"，参与 islot_ammo::dispersion_considering_length
+    std::vector<std::pair<double, double>> disp_by_barrel;
+
     std::string source;
 };
 
@@ -164,12 +171,14 @@ void add_gun( const char *id, const char *name, const char *name_en, const char 
               const char *source );
 
 void add_ammo( const char *id, const char *name, const char *name_en, const char *ammo_type,
-               double recoil, double dispersion, double range, const char *source );
+               double recoil, double dispersion, double range,
+               std::initializer_list<std::pair<double, double>> disp_by_barrel,
+               const char *source );
 
 void add_gunmod( const char *id, const char *name, const char *name_en, const char *location,
                  double handling_modifier, double dispersion_modifier, double aim_speed_modifier,
                  double sight_dispersion, double field_of_view,
-                 double weight_g, double volume_ml, bool bipod,
+                 double weight_g, double volume_ml, double barrel_length_mm, bool bipod,
                  bool laser_sight, bool zoom,
                  std::initializer_list<const char *> ammo_modifier,
                  std::initializer_list<const char *> mod_targets,

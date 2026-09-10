@@ -331,15 +331,20 @@ def main():
         name_zh, name_en = tr.name_of(r)
         aliases_zh, aliases_en = [], []
 
-        # DDA 的变体机制：如果某个变体的 id 与条目 id 相同，它就是这把枪的
-        # 正式名（条目自身的 name 反而是通用称呼，如 "Glock pistol"）。
-        # 例如 glock_20 的变体里有 id="glock_20" / name="Glock 20 pistol"。
+        # DDA 的变体机制：变体名往往才是这把枪在游戏里显示的名字，
+        # 条目自身的 name 只是通用称呼（如 "Glock pistol" / "M16 auto rifle"）。
+        # 取主名的优先级：
+        #   1. 变体 id 等于条目 id   —— 如 glock_20 的变体 id="glock_20"
+        #   2. 只有一个变体           —— 如 modular_m16_auto_rifle 只有 M16A3
+        #   3. 否则用条目自身的 name  —— 如 modular_m4_carbine 有 M4A1 / Mk18 两个变体
         variants = [v for v in (r.get("variants") or []) if isinstance(v, dict)]
         primary_zh, primary_en = None, None
         for v in variants:
             if v.get("id") == oid:
                 primary_zh, primary_en = tr.name_of(v)
                 break
+        if primary_en is None and len(variants) == 1:
+            primary_zh, primary_en = tr.name_of(variants[0])
         if primary_en:
             # 条目自身的名字降级为别名
             if name_en and name_en != primary_en:
@@ -408,13 +413,25 @@ def main():
         atype = r.get("ammo_type")
         if isinstance(atype, list):
             atype = atype[0] if atype else ""
+        # 枪管长度 → 散布 的插值表（dispersion_considering_length 用）
+        pairs = []
+        for e in (r.get("dispersion_modifier") or []):
+            if not isinstance(e, dict):
+                continue
+            bl = parse_unit(e.get("barrel_length"), LENGTH_UNITS, -1)
+            dv = e.get("dispersion")
+            if bl >= 0 and isinstance(dv, (int, float)):
+                pairs.append("{%s, %s}" % (fnum(bl), fnum(dv)))
+        disp_tbl = "{" + ", ".join(pairs) + "}"
+
         lines.append(
-            '    add_ammo(%s, %s, %s, %s, %s, %s, %s, %s);'
+            '    add_ammo(%s, %s, %s, %s, %s, %s, %s, %s, %s);'
             % (
                 cstr(oid), cstr(name_zh), cstr(name_en), cstr(atype or ""),
                 fnum(parse_unit(r.get("recoil"), {}, 0)),
                 fnum(parse_unit(r.get("dispersion"), {}, 0)),
                 fnum(parse_unit(r.get("range"), {}, 0)),
+                disp_tbl,
                 cstr(db.src_of.get(oid, "core")),
             ))
 
@@ -422,7 +439,8 @@ def main():
     with io.open(path, "w", encoding="utf-8", newline="\n") as f:
         f.write(HEADER % ("gen_ammo.cpp  生成的弹药数据", "core" if not mods else "core + " + ",".join(mods),
                           len(ammos), "load_generated_ammo", "g_ammo", len(ammos)))
-        f.write(FIELDS_NOTE % "id, name, name_en, ammo_type, recoil, dispersion, range, source")
+        f.write(FIELDS_NOTE % ("id, name, name_en, ammo_type, recoil, dispersion, range, "
+                               "disp_by_barrel, source"))
         f.write("\n")
         f.write("\n".join(lines))
         f.write("\n}\n")
@@ -443,7 +461,7 @@ def main():
             if isinstance(pair, list) and pair and isinstance(pair[0], str):
                 added.append(pair[0])
         lines.append(
-            '    add_gunmod(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);'
+            '    add_gunmod(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);'
             % (
                 cstr(oid), cstr(name_zh), cstr(name_en), cstr(loc),
                 fnum(parse_unit(r.get("handling_modifier"), {}, 0)),
@@ -453,6 +471,7 @@ def main():
                 fnum(parse_unit(r.get("field_of_view"), {}, -1)),
                 fnum(parse_unit(r.get("weight"), WEIGHT_UNITS)),
                 fnum(parse_unit(r.get("volume"), VOLUME_UNITS)),
+                fnum(parse_unit(r.get("barrel_length"), LENGTH_UNITS)),
                 "true" if "BIPOD" in flags else "false",
                 "true" if "LASER_SIGHT" in flags else "false",
                 "true" if "ZOOM" in flags else "false",
@@ -466,7 +485,8 @@ def main():
                           len(gunmods), "load_generated_gunmods", "g_mods", len(gunmods)))
         f.write(FIELDS_NOTE % ("id, name, name_en, location, handling_modifier, "
                                "dispersion_modifier, aim_speed_modifier, sight_dispersion, "
-                               "field_of_view, weight_g, volume_ml, bipod, laser_sight, zoom, "
+                               "field_of_view, weight_g, volume_ml, barrel_length_mm, "
+                               "bipod, laser_sight, zoom, "
                                "ammo_modifier, mod_targets, add_mod, source"))
         f.write("\n")
         f.write("\n".join(lines))
