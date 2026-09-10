@@ -258,6 +258,14 @@ inline const char *CMP_NOTE      =
     "      不同口径之间这一列不可直接横向比较。\n";
 inline const char *CMP_NO_AMMO   = "（无适配弹药）";
 
+// ---- 瞄准收益曲线 ----
+inline const char *HDR_CURVE     = "\n================= 瞄准收益曲线 =================\n";
+inline const char *NOTE_CURVE    =
+    "  （横轴 = 瞄准回合（1 回合 = 100 行动点），纵轴 = 50%好击距离（格）\n"
+    "    曲线到顶后就白瞄了 —— 瞄准误差压到精度下限便再也降不下去）\n";
+inline const char *C_TURN        = "回合";
+inline const char *C_RANGE_AXIS  = " 格";
+
 // ---- 命中档位概率 ----
 inline const char *HDR_PROB      = "\n================= 命中档位概率 =================\n";
 inline const char *NOTE_PROB     =

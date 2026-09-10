@@ -773,6 +773,85 @@ static void print_dispersion_impact(const Gun& g, const Character& c, const Ammo
     // 命中档位概率表给出的是真实分布，信息量更大也更诚实。
 }
 
+// ---- 瞄准收益曲线 ------------------------------------------------------------
+// 横轴 = 瞄准回合，纵轴 = 50%好击距离。
+// 每回合推进 100 个行动点，记录该时刻的瞄准误差能打到多远。
+// 曲线到顶后保持水平 —— 因为瞄准误差压到「瞄准精度上限」就降不下去了。
+static void print_range_curve(const Gun& g, const Character& c, const Ammo* ammo)
+{
+    using namespace zh::t;
+
+    const double fixed_disp = get_weapon_dispersion(g, c, ammo);
+
+    AimContext ctx;
+    ctx.len_factor = 1.0;
+    ctx.limit      = most_accurate_aiming_method_limit(g, c);
+    ctx.vol_factor = aim_factor_from_volume(g, effective_volume(g));
+
+    const int TURN = 100;        // 一回合的行动点
+    const int MAXT = 20;         // 最多画 20 回合
+
+    std::vector<int> ys;         // ys[t] = 第 t 回合的 50%好击距离
+    double recoil = MAX_RECOIL;
+    int flat = 0;
+    for( int t = 0; t <= MAXT; t++ ) {
+        ys.push_back( range_with_even_chance_of_good_hit( fixed_disp + recoil ) );
+        if( t > 0 && ys[t] == ys[t - 1] ) {
+            if( ++flat >= 3 ) break;      // 连续 3 回合没变化就不再画了
+        } else {
+            flat = 0;
+        }
+        for( int i = 0; i < TURN && recoil > ctx.limit; i++ ) {
+            const double amt = aim_per_move( g, c, recoil, ctx );
+            if( amt <= 0 ) break;
+            recoil = std::max( ctx.limit, recoil - amt );
+        }
+    }
+
+    const int W    = (int)ys.size();
+    const int maxY = *std::max_element( ys.begin(), ys.end() );
+    const int H    = std::max( 1, std::min( maxY, 15 ) );   // 最多 15 行，避免刷屏
+
+    std::cout << HDR_CURVE << NOTE_CURVE;
+
+    // 行：从高到低。每列占 2 个字符宽，好让横轴刻度标得下
+    for( int y = H; y >= 0; y-- ) {
+        std::cout << pad( std::to_string( y ), 4 ) << "│";
+        for( int x = 0; x < W; x++ ) {
+            const int cur  = std::min( ys[x], H );
+            const int prev = std::min( x > 0 ? ys[x - 1] : cur, H );
+            const int lo = std::min( cur, prev );
+            const int hi = std::max( cur, prev );
+            if( y == cur ) {
+                // 与右邻点同高就连一条横线，让平坦段看起来是折线而不是散点
+                const bool flat_next = ( x + 1 < W ) && ( std::min( ys[x + 1], H ) == y );
+                std::cout << ( flat_next ? "◆─" : "◆ " );
+            } else if( y > lo && y < hi ) {
+                std::cout << "│ ";
+            } else {
+                std::cout << "  ";
+            }
+        }
+        std::cout << "\n";
+    }
+
+    // 横轴
+    std::cout << "    └";
+    for( int x = 0; x < W; x++ ) std::cout << "──";
+    std::cout << "→ " << C_TURN << "\n     ";
+    for( int x = 0; x < W; x++ ) {
+        std::cout << pad( std::to_string( x ), 2 );
+    }
+    std::cout << "\n\n";
+
+    // 数据表（图看不清时看这个）
+    std::cout << "      " << pad( C_TURN, 8 ) << pad( LV_50RANGE, 16 ) << "\n";
+    for( int x = 0; x < W; x++ ) {
+        std::cout << "      " << pad( std::to_string( x ), 8 )
+                  << pad( std::to_string( ys[x] ) + C_RANGE_AXIS, 16 ) << "\n";
+    }
+}
+
 // ---- 命中档位概率表 ----------------------------------------------------------
 // 对每个瞄准档位采样一批散布掷骰，再对每个距离换算成未命中度、统计各档位占比。
 // 散布的掷骰与距离无关，所以每档只采样一次，各距离复用同一批样本。
@@ -1262,6 +1341,7 @@ static void ui_detail()
 
     print_gun_summary(gun, ch, ammo);
     print_aim_timeline(gun, ch, ammo);
+    print_range_curve(gun, ch, ammo);
     print_dispersion_impact(gun, ch, ammo);
     print_hit_probabilities(gun, ch, ammo);
     // 配件库不再输出 —— 装配界面已按枪过滤并分组，全量列表没有参考价值
