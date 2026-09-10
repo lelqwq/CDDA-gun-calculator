@@ -704,34 +704,29 @@ static void print_aim_timeline(const Gun& g, const Character& c, const Ammo* amm
 
     (void)ammo;   // 瞄准时间线只由枪/瞄具/人物决定，与弹药无关
     std::cout << HDR_AIMTIME;
-    std::cout << NOTE_AIMTIME;
-    std::cout << "  " << pad(C_SKILL, 10) << pad(C_TO_1, 14) << pad(C_TO_2, 14)
-              << pad(C_TO_3, 14) << pad(C_AFTER_TURN, 18) << "\n";
-    std::cout << "  " << std::string(72, '-') << "\n";
 
-    for (double s : {0.0, 2.0, 5.0, 8.0, 10.0}) {
-        Character cc = c; cc.skill_level = s;
-        AimContext ctx; ctx.len_factor = 1.0;
-        AimResult r = simulate_aim(g, cc, ctx);
+    char cbuf[320];
+    std::snprintf(cbuf, sizeof(cbuf), NOTE_AIMCHAR,
+                  zh::skill(g.skill).c_str(), c.skill_level, c.marksmanship_level, c.dex, c.per);
+    std::cout << cbuf << NOTE_AIMTIME;
 
-        std::ostringstream a, b, d;
-        a << r.moves_to_regular << U_AP;
-        b << r.moves_to_careful << U_AP;
-        d << r.moves_to_precise << U_AP;
-        std::ostringstream e;
-        e << std::fixed << std::setprecision(0) << r.recoil_after_1_turn;
+    AimContext ctx;
+    ctx.len_factor = 1.0;
+    const AimResult r = simulate_aim(g, c, ctx);
 
-        std::cout << "  " << pad(std::to_string((int)s), 10)
-                  << pad(a.str(), 14) << pad(b.str(), 14) << pad(d.str(), 14)
-                  << pad(e.str(), 16) << "\n";
+    const struct { const char *label; int mv; } rows[] = {
+        { C_TO_1, r.moves_to_regular },
+        { C_TO_2, r.moves_to_careful },
+        { C_TO_3, r.moves_to_precise },
+    };
+    for (auto &row : rows) {
+        std::cout << "  " << pad(row.label, 12) << row.mv << U_AP << "\n";
     }
-    AimContext ctx; ctx.len_factor = 1.0;
-    AimResult r0 = simulate_aim(g, c, ctx);
-    std::cout << LBL_THRESHOLD << (int)r0.regular_th
-              << LBL_THRESH2 << (int)r0.careful_th
-              << LBL_THRESH3 << (int)r0.precise_th << "\n";
-    std::cout << LBL_TURNDROP << (int)r0.delta_1_turn << ARROW_OPEN
-              << (int)r0.recoil_after_1_turn << ARROW_CLOSE;
+
+    std::cout << "\n" << LBL_TURNDROP2 << (int)r.recoil_after_1_turn << "\n";
+    std::cout << LBL_THRESHOLD << (int)r.regular_th
+              << LBL_THRESH2 << (int)r.careful_th
+              << LBL_THRESH3 << (int)r.precise_th << "\n";
 }
 
 static void print_dispersion_impact(const Gun& g, const Character& c, const Ammo* ammo)

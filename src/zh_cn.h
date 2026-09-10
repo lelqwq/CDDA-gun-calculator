@@ -127,19 +127,17 @@ inline const char *PCT_CLOSE     = "%）\n";
 
 // ---- 瞄准时间线 ----
 inline const char *HDR_AIMTIME   = "\n================= 瞄准时间线 =================\n";
-inline const char *NOTE_AIMTIME  = "  （从瞄准误差 3000 开始，每消耗 1 点行动力降低一次）\n\n";
-inline const char *C_SKILL       = "枪械技能";
+inline const char *NOTE_AIMTIME  = "  （从瞄准误差 3000 开始，每消耗 1 点行动力降低一次）\n";
+inline const char *NOTE_AIMCHAR  =
+    "  当前人物：%s %g 级 / 枪械技能 %g 级 / 敏捷 %g / 感知 %g\n\n";
+inline const char *LBL_TURNDROP2 = "  一回合（100 行动点）后降到 ";
 inline const char *C_TO_1        = "到普通档";
 inline const char *C_TO_2        = "到仔细档";
 inline const char *C_TO_3        = "到精准档";
-inline const char *C_AFTER_TURN  = "一回合(100点)后";
 inline const char *U_AP          = " 行动点";
-inline const char *LBL_THRESHOLD = "\n  档位阈值: 普通 ";
+inline const char *LBL_THRESHOLD = "  档位阈值: 普通 ";
 inline const char *LBL_THRESH2   = "  /  仔细 ";
 inline const char *LBL_THRESH3   = "  /  精准 ";
-inline const char *LBL_TURNDROP  = "  一回合降幅: ";
-inline const char *ARROW_OPEN    = "  （3000 → ";
-inline const char *ARROW_CLOSE   = "）\n";
 
 // ---- 散布 → 命中影响 ----
 inline const char *HDR_DISPIMP   = "\n================= 散布 → 命中影响 =================\n";
