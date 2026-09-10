@@ -25,8 +25,10 @@ echo [2/2] Compiling src\gunlab.cpp + src\gun_data.cpp ...
 REM -static makes the .exe self-contained: without it the binary needs
 REM libgcc_s_seh-1.dll / libstdc++-6.dll at run time, which are NOT on PATH
 REM when you double-click the exe from Explorer.
-g++ -std=c++17 -O2 -Wall -Wextra -static -static-libgcc -static-libstdc++ ^
-    -o build\gunlab_gcc.exe src\gunlab.cpp src\gun_data.cpp
+g++ -std=c++17 -O2 -Wall -Wextra -Isrc -static -static-libgcc -static-libstdc++ ^
+    -o build\gunlab_gcc.exe ^
+    src\gunlab.cpp src\gun_data.cpp ^
+    src\generated\gen_guns.cpp src\generated\gen_ammo.cpp src\generated\gen_gunmods.cpp
 set RC=%ERRORLEVEL%
 
 echo.

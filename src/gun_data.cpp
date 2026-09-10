@@ -1,18 +1,16 @@
 // =============================================================================
-//  gun_data.cpp  —  内置数据库
+//  gun_data.cpp  —  数据库容器与填充函数
 // -----------------------------------------------------------------------------
-//  ★ 想改枪械/弹药/配件的数值，只动这个文件 ★
+//  实际数据不在这里，而是由脚本从游戏数据生成，位于 src/generated/：
+//      python scripts/gen_gun_data.py --game "<游戏目录>"
 //
-//  数值取自 Cataclysm-DDA 的 data/json/，注释里标了出处。
-//  中文名取自游戏 lang/mo/zh_CN/LC_MESSAGES/cataclysm-dda.mo 的官方译文
-//  （提取方法见 extract_zh.py）。
+//  本文件只负责：
+//    · 定义三个全局容器
+//    · 提供生成的代码调用的 add_gun / add_ammo / add_gunmod
+//    · init_database() 把生成的三个加载函数串起来
 //
-//  加一把新枪：在 init_database() 的"枪械"段照抄一段，改字段即可。
-//  加一个新配件：在"配件"段加一行 mk_mod(...)。
-//  加一种弹药：在"弹药"段加一行。
-//
-//  注意：GunMod.location / Gun.skill / GunMod.id 是**逻辑键**，
-//  必须和代码里的比较、以及游戏 JSON 保持一致，不要翻译成中文。
+//  想手写几条测试数据？直接在 init_database() 里调 add_gun(...) 即可，
+//  生成的数据会先装填，你的手写条目追加在后面。
 // =============================================================================
 
 #include "gun_data.h"
@@ -21,89 +19,110 @@ std::vector<Gun>    g_guns;
 std::vector<Ammo>   g_ammo;
 std::vector<GunMod> g_mods;
 
-// 配件工厂：只想设名字/槽位/操控/瞄准时用它，其余字段留默认值
-static GunMod mk_mod( const std::string &id, const std::string &name, const std::string &loc,
-                      double handling = 0, double aim = 0, double sight = -1, double fov = -1 )
+// -----------------------------------------------------------------------------
+//  填充函数（供 src/generated/ 下的代码调用）
+// -----------------------------------------------------------------------------
+
+void add_gun( const char *id, const char *name, const char *name_en, const char *skill,
+              double dispersion, double sight_dispersion, double handling, double durability,
+              double recoil, double weight_g, double volume_ml, double longest_side_mm,
+              double min_cycle_recoil, double barrel_length_mm, bool disable_sights,
+              std::initializer_list<const char *> ammo_types,
+              std::initializer_list<const char *> mod_slots,
+              std::initializer_list<const char *> aliases_zh,
+              std::initializer_list<const char *> aliases_en,
+              const char *source )
+{
+    Gun g;
+    g.id   = id ? id : "";
+    g.name = name ? name : "";
+    g.name_en = name_en ? name_en : "";
+    g.skill   = skill ? skill : "";
+
+    g.dispersion       = dispersion;
+    g.sight_dispersion = sight_dispersion;
+    g.durability       = durability;
+    g.recoil           = recoil;
+    g.weight_g         = weight_g;
+    g.volume_ml        = volume_ml;
+    g.longest_side_mm  = longest_side_mm;
+    g.min_cycle_recoil = min_cycle_recoil;
+    g.barrel_length_mm = barrel_length_mm;
+    g.disable_sights   = disable_sights;
+    g.source           = source ? source : "core";
+
+    // handling < 0 表示"按类型自动取"  item_factory.cpp:761
+    if( handling < 0 ) {
+        const bool heavy = ( g.skill == "rifle" || g.skill == "smg" || g.skill == "shotgun" );
+        g.handling = heavy ? 20.0 : 10.0;
+    } else {
+        g.handling = handling;
+    }
+
+    for( const char *s : ammo_types ) g.ammo_types.push_back( s ? s : "" );
+    for( const char *s : mod_slots  ) g.mod_slots.push_back( s ? s : "" );
+    for( const char *s : aliases_zh ) g.aliases.push_back( s ? s : "" );
+    for( const char *s : aliases_en ) g.aliases_en.push_back( s ? s : "" );
+
+    g_guns.push_back( g );
+}
+
+void add_ammo( const char *id, const char *name, const char *name_en, const char *ammo_type,
+               double recoil, double dispersion, double range, const char *source )
+{
+    Ammo a;
+    a.id   = id ? id : "";
+    a.name = name ? name : "";
+    a.name_en   = name_en ? name_en : "";
+    a.ammo_type = ammo_type ? ammo_type : "";
+    a.recoil     = recoil;
+    a.dispersion = dispersion;
+    a.range      = range;
+    a.source     = source ? source : "core";
+    g_ammo.push_back( a );
+}
+
+void add_gunmod( const char *id, const char *name, const char *name_en, const char *location,
+                 double handling_modifier, double dispersion_modifier, double aim_speed_modifier,
+                 double sight_dispersion, double field_of_view,
+                 double weight_g, double volume_ml, bool bipod,
+                 bool laser_sight, bool zoom,
+                 std::initializer_list<const char *> ammo_modifier,
+                 std::initializer_list<const char *> mod_targets,
+                 const char *source )
 {
     GunMod m;
-    m.id = id; m.name = name; m.location = loc;
-    m.handling_modifier = handling;
-    m.aim_speed_modifier = aim;
-    m.sight_dispersion = sight;
-    m.field_of_view = fov;
-    return m;
+    m.id   = id ? id : "";
+    m.name = name ? name : "";
+    m.name_en  = name_en ? name_en : "";
+    m.location = location ? location : "";
+
+    m.handling_modifier   = handling_modifier;
+    m.dispersion_modifier = dispersion_modifier;
+    m.aim_speed_modifier  = aim_speed_modifier;
+    m.sight_dispersion    = sight_dispersion;
+    m.field_of_view       = field_of_view;
+    m.weight_g            = weight_g;
+    m.volume_ml           = volume_ml;
+    m.bipod               = bipod;
+    m.laser_sight         = laser_sight;
+    m.zoom                = zoom;
+    m.source              = source ? source : "core";
+
+    for( const char *s : ammo_modifier ) m.ammo_modifier.push_back( s ? s : "" );
+    for( const char *s : mod_targets  ) m.mod_targets.push_back( s ? s : "" );
+
+    g_mods.push_back( m );
 }
+
+// -----------------------------------------------------------------------------
+//  初始化
+// -----------------------------------------------------------------------------
 
 void init_database()
 {
-    // =========================================================================
-    //  弹药
-    // =========================================================================
-    // 注意：这里只填本程序真正用到的字段（recoil / dispersion）。
-    // damage / armor_pen / loudness 未经核对，故不预置 —— 需要的话请自行从
-    // data/json/items/ammo/*.json 抄入，并在 Ammo 结构里接进计算。
-    { Ammo a; a.id="10mm_fmj"; a.name="10mm FMJ 弹";  a.recoil=750;  a.dispersion=50; a.range=14; g_ammo.push_back(a); }
-    { Ammo a; a.id="223_rem";  a.name="5.56x45mm 弹"; a.recoil=1350; a.dispersion=45; a.range=16; g_ammo.push_back(a); }
-    { Ammo a; a.id="bp_10mm";  a.name="10mm 黑火药弹"; a.recoil=570;  a.dispersion=60; a.range=12; g_ammo.push_back(a); }
-
-    // =========================================================================
-    //  配件：瞄准速度类（data/json/items/gunmod/）
-    // =========================================================================
-    g_mods.push_back(mk_mod("laser_sight",   "管下激光瞄具",         "underbarrel", 0, 15, 30, 3000));
-    g_mods.push_back(mk_mod("rail_laser",    "导轨激光瞄具",         "rail",        0, 15, 30, 3000));
-    g_mods.push_back(mk_mod("mipim",         "军用战术手电激光模块", "rail",        0, 15, 30, 3000));
-    g_mods.push_back(mk_mod("red_dot_sight", "红点瞄准镜",           "sights",      0, 10, 27,  630));
-    g_mods.push_back(mk_mod("holo_sight",    "全息瞄准镜",           "sights",      0, 10, 23,  720));
-    g_mods.push_back(mk_mod("holo_magnifier","瞄准镜变焦器",         "magnifier",   0,  5, 13,  270));
-    g_mods.push_back(mk_mod("rifle_scope",   "步枪瞄准镜",           "sights",      0, -1, 10,  180));
-
-    // =========================================================================
-    //  配件：后坐 / 操控类
-    // =========================================================================
-    { GunMod m = mk_mod("bipod","两脚架","underbarrel",18); m.bipod = true; g_mods.push_back(m); }
-    g_mods.push_back(mk_mod("modern_handguard",   "高端护木",         "underbarrel", 6));
-    g_mods.push_back(mk_mod("grip",               "前置握把",         "underbarrel", 6));
-    g_mods.push_back(mk_mod("offset_grip",        "侧面握把",         "rail",        4));
-    g_mods.push_back(mk_mod("recoil_stock",       "后坐缓冲枪托",     "stock",       4));
-    g_mods.push_back(mk_mod("muzzle_brake",       "枪口制退器",       "muzzle",      4));
-    g_mods.push_back(mk_mod("barrel_ported",      "气孔式枪管",       "barrel",      4));
-    g_mods.push_back(mk_mod("cheek_pad",          "托腮板",           "stock accessory", 2));
-    g_mods.push_back(mk_mod("compensator",        "补偿器",           "muzzle",      1));
-    g_mods.push_back(mk_mod("adjustable_stock",   "可调节枪托",       "stock",       1));
-    g_mods.push_back(mk_mod("folding_stock_folded","折叠枪托（折叠）", "stock",     -15));
-
-    // =========================================================================
-    //  枪械
-    // =========================================================================
-    {   // M4A1 = modular_m4_carbine 的变体 + retool_ar15_223rem 上机匣
-        Gun gun;
-        gun.id   = "m4a1";
-        gun.name = "M4A1 卡宾枪（含 .223 中长上机匣）";
-        gun.skill            = "rifle";
-        gun.dispersion       = 180;              // 223.json
-        gun.sight_dispersion = 40;               // gun_base_rifle_semi
-        gun.handling         = 20;               // item_factory.cpp:761 步枪默认
-        gun.durability       = 8;
-        gun.recoil           = 0;
-        gun.weight_g         = 880 + 2268;       // 下机匣 + 上机匣
-        gun.volume_ml        = 1760 + 1550;
-        gun.longest_side_mm  = 850;              // 组装后全长（近似）
-        gun.min_cycle_recoil = 1350;
-        g_guns.push_back(gun);
-    }
-    {   // Glock 29
-        Gun gun;
-        gun.id   = "glock_29";
-        gun.name = "格洛克 29 手枪（10mm）";
-        gun.skill            = "pistol";
-        gun.dispersion       = 510;              // 10mm.json
-        gun.sight_dispersion = 60;               // gun_base_handgun_semi
-        gun.handling         = 10;               // 手枪默认
-        gun.durability       = 8;
-        gun.weight_g         = 690;
-        gun.volume_ml        = 410;
-        gun.longest_side_mm  = 177;
-        gun.min_cycle_recoil = 720;
-        g_guns.push_back(gun);
-    }
+    // 由游戏数据生成，见 src/generated/
+    load_generated_guns();
+    load_generated_ammo();
+    load_generated_gunmods();
 }

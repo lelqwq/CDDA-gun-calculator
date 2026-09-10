@@ -35,7 +35,14 @@ endif()
 add_executable(gunlab
     src/gunlab.cpp
     src/gun_data.cpp
+    # 由 scripts/gen_gun_data.py 从游戏数据生成，请勿手工编辑
+    src/generated/gen_guns.cpp
+    src/generated/gen_ammo.cpp
+    src/generated/gen_gunmods.cpp
 )
+
+# 生成的代码用 #include "gun_data.h"，所以要能找到 src/
+target_include_directories(gunlab PRIVATE src)
 
 # ---- 输出路径 ---------------------------------------------------------------
 # 让 exe 直接落在 build/ 下，而不是 build/Debug/ 之类的子目录（Visual Studio

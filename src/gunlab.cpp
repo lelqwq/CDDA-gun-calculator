@@ -247,7 +247,7 @@ static double aim_per_move(const Gun& g, const Character& c, double recoil, cons
 static int gun_recoil(const Gun& g, double arm_str, double ammo_recoil,
                       bool bipod = false, bool ideal_strength = false)
 {
-    if (!g.ammo_required || ammo_recoil <= 0) return 0;
+    if (ammo_recoil <= 0) return 0;   // 没有弹药就没有后坐（DDA 的后坐全部来自弹药）
 
     const double wt = ideal_strength
                     ? g.weight_g / 333.0

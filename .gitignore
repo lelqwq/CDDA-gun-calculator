@@ -36,6 +36,13 @@ Makefile
 *.swp
 *~
 
+# ---- Python ----
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
 # ---- 临时文件 ----
 *.tmp
 *.log

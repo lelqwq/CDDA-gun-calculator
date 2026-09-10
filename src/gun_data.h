@@ -2,18 +2,18 @@
 //  gun_data.h  —  数据结构、常量、内置数据库的接口
 // -----------------------------------------------------------------------------
 //  这是"数据层"的头文件：定义长什么样、有哪些字段、能查什么。
-//  实际数值在 gun_data.cpp 里 —— 想改枪械/弹药/配件数据，只动那个文件。
 //
-//  字段名尽量与 Cataclysm-DDA 的 JSON 字段保持一致，方便回查：
-//    data/json/items/gun/*.json
-//    data/json/items/ammo/*.json
-//    data/json/items/gunmod/*.json
-//    src/itype.h（islot_gun / islot_gunmod / islot_ammo）
+//  ★ 枪械 / 弹药 / 配件的数据不再手写，而是由脚本从游戏数据生成：
+//        python scripts/gen_gun_data.py --game "<游戏目录>"
+//    产物在 src/generated/ 下，请勿手工编辑。
+//
+//  字段名尽量与 Cataclysm-DDA 的 JSON 字段保持一致，方便回查。
 // =============================================================================
 
 #pragma once
 
 #include <algorithm>
+#include <initializer_list>
 #include <string>
 #include <vector>
 
@@ -41,57 +41,68 @@ constexpr double ACC_GRAZING  = 1.0;
 // 配件  islot_gunmod  item_factory.cpp:3844
 struct GunMod {
     std::string id;
-    std::string name;                  // 显示名（中文）
+    std::string name;                  // 中文显示名
+    std::string name_en;               // 英文原名（搜索用）
     std::string location;              // rail / sights / muzzle / underbarrel / stock ...
-                                       // 注意：这是**逻辑键**，代码里有 has_mod() 比较，
-                                       // 且与游戏 JSON 的 location 字段一致，不要改成中文
+                                       // ★ 逻辑键，与游戏 JSON 一致，不要翻译
+
     double      handling_modifier   = 0.0;   // 越大后坐越小
-    double      dispersion_modifier = 0.0;   // 加到枪基础散布
+    double      dispersion_modifier = 0.0;
     double      aim_speed_modifier  = 0.0;   // 越大瞄得越快
     double      sight_dispersion    = -1.0;
     double      field_of_view       = -1.0;
-    bool        bipod               = false; // 带 BIPOD flag：只在架设时计入 handling
-    bool        laser_sight         = false;
-    bool        zoom                = false;
-    double      weight_g            = 0.0;
-    double      volume_ml           = 0.0;
-    double      longest_side_mm     = 0.0;
-    double      range_modifier      = 0.0;
+    double      weight_g            = 0.0;   // 装上后给枪增加的重量
+    double      volume_ml           = 0.0;   // 装上后给枪增加的体积
+    bool        bipod               = false; // BIPOD flag：只在架设时计入 handling
+    bool        laser_sight         = false; // LASER_SIGHT flag：受光照/距离限制
+    bool        zoom                = false; // ZOOM flag：视差减到 1/4
+
+    std::vector<std::string> ammo_modifier;  // 上机匣提供的口径（模块化枪械用）
+    std::vector<std::string> mod_targets;    // 可装的枪类型或具体枪械 id
+
+    std::string source;                      // "core" 或 mod 名
 };
 
 // 弹药  islot_ammo
 struct Ammo {
     std::string id;
     std::string name;
-    double      recoil     = 0.0;      // 本程序真正用到的字段
-    double      dispersion = 0.0;      // 本程序真正用到的字段
+    std::string name_en;
+    std::string ammo_type;             // 口径，与枪的 ammo_types 对应
+    double      recoil     = 0.0;      // ★ DDA 的后坐全部来自弹药
+    double      dispersion = 0.0;
     double      range      = 0.0;
-    double      loudness   = 0.0;      // 以下字段当前未参与计算，需要时自行接进公式
-    std::string damage_type = "bullet";
-    double      damage     = 0.0;
-    double      armor_pen  = 0.0;
+    std::string source;
 };
 
 // 枪械  islot_gun
 struct Gun {
     std::string id;
-    std::string name;
-    std::string skill        = "rifle";   // pistol / rifle / shotgun / smg / launcher / archery
-                                          // 同样是与游戏一致的逻辑键，不要改中文
-    double      dispersion   = 0.0;       // 枪本身散布（JSON 原值，未除 18）
-    double      sight_dispersion = 40.0;  // 铁瞄散布
-    double      handling     = 10.0;      // 操控性；<0 表示按类型自动取（步枪 20 / 其他 10）
-    double      durability   = 8.0;
-    double      recoil       = 0.0;       // 枪本身后坐（DDA 里几乎全是 0，后坐来自弹药）
-    double      weight_g     = 0.0;
-    double      volume_ml    = 0.0;
-    double      longest_side_mm = 0.0;
-    double      min_cycle_recoil = 0.0;
-    bool        ammo_required    = true;
-    bool        disable_sights   = false;  // DISABLE_SIGHTS flag
-    bool        primitive_ranged = false;  // PRIMITIVE_RANGED_WEAPON flag
+    std::string name;                  // 中文显示名
+    std::string name_en;               // 英文原名（搜索用）
+    std::string skill;                 // ★ 逻辑键：pistol / rifle / shotgun / smg / launcher / archery
 
-    std::vector<GunMod> mods;
+    double      dispersion       = 0.0;   // 枪本身散布（JSON 原值，未除 18）
+    double      sight_dispersion = 30.0;  // item_factory.cpp:3411 默认 30
+    double      handling         = -1.0;  // <0 表示按类型自动取（步枪/SMG/霰弹枪 20，其余 10）
+    double      durability       = 8.0;
+    double      recoil           = 0.0;   // DDA 里几乎全是 0
+    double      weight_g         = 0.0;
+    double      volume_ml        = 0.0;
+    double      longest_side_mm  = 0.0;
+    double      min_cycle_recoil = 0.0;
+    double      barrel_length_mm = 0.0;   // 弹药伤害插值用
+
+    bool        disable_sights = false;    // DISABLE_SIGHTS flag：只能用腰射
+
+    std::vector<std::string> ammo_types;   // 可用的口径（模块化枪械为空，口径来自配件）
+    std::vector<std::string> mod_slots;    // valid_mod_locations 的槽位名
+    std::vector<std::string> aliases;      // 变体的中文名
+    std::vector<std::string> aliases_en;   // 变体的英文名
+
+    std::string source;                    // "core" 或 mod 名
+
+    std::vector<GunMod> mods;              // 已安装的配件
 
     bool has_mod( const std::string &loc ) const {
         for( const auto &m : mods ) if( m.location == loc ) return true;
@@ -126,12 +137,44 @@ struct Character {
 };
 
 // =============================================================================
-//  三、内置数据库（定义在 gun_data.cpp）
+//  三、内置数据库
 // =============================================================================
 
 extern std::vector<Gun>    g_guns;
 extern std::vector<Ammo>   g_ammo;
 extern std::vector<GunMod> g_mods;
 
-// 装填上面的数据库。程序启动时调用一次。
+// 装填数据库。程序启动时调用一次。
+// 内部会依次调用生成的 load_generated_guns / _ammo / _gunmods。
 void init_database();
+
+// ---- 供生成的代码调用的填充函数 ---------------------------------------------
+// 参数顺序与 src/generated/ 下三个文件里的调用严格对应。
+// 改这里的签名，必须同步改 scripts/gen_gun_data.py。
+
+void add_gun( const char *id, const char *name, const char *name_en, const char *skill,
+              double dispersion, double sight_dispersion, double handling, double durability,
+              double recoil, double weight_g, double volume_ml, double longest_side_mm,
+              double min_cycle_recoil, double barrel_length_mm, bool disable_sights,
+              std::initializer_list<const char *> ammo_types,
+              std::initializer_list<const char *> mod_slots,
+              std::initializer_list<const char *> aliases_zh,
+              std::initializer_list<const char *> aliases_en,
+              const char *source );
+
+void add_ammo( const char *id, const char *name, const char *name_en, const char *ammo_type,
+               double recoil, double dispersion, double range, const char *source );
+
+void add_gunmod( const char *id, const char *name, const char *name_en, const char *location,
+                 double handling_modifier, double dispersion_modifier, double aim_speed_modifier,
+                 double sight_dispersion, double field_of_view,
+                 double weight_g, double volume_ml, bool bipod,
+                 bool laser_sight, bool zoom,
+                 std::initializer_list<const char *> ammo_modifier,
+                 std::initializer_list<const char *> mod_targets,
+                 const char *source );
+
+// 生成的代码（定义在 src/generated/ 下）
+void load_generated_guns();
+void load_generated_ammo();
+void load_generated_gunmods();
