@@ -1,7 +1,11 @@
 # ---- 构建产物 ----
 build/
+build-gui/
 out/
 cmake-build-*/
+
+# SDL3 运行库（构建脚本会从 msys64 拷过来）
+SDL3.dll
 
 # 可执行文件与目标文件
 *.exe

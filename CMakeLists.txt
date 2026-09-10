@@ -47,6 +47,44 @@ target_include_directories(gunlab_core PUBLIC src)
 add_executable(gunlab src/gunlab.cpp)
 target_link_libraries(gunlab PRIVATE gunlab_core)
 
+# ---- 图形界面版（需要 SDL3；找不到就只构建命令行版）-------------------------
+# 渲染用 SDL3 自带的 SDL_Renderer，不依赖 OpenGL 加载器。
+find_package(SDL3 QUIET)
+
+if(SDL3_FOUND)
+    add_library(imgui STATIC
+        third_party/imgui/imgui.cpp
+        third_party/imgui/imgui_draw.cpp
+        third_party/imgui/imgui_tables.cpp
+        third_party/imgui/imgui_widgets.cpp
+        third_party/imgui/imgui_stdlib.cpp
+        third_party/imgui/imgui_impl_sdl3.cpp
+        third_party/imgui/imgui_impl_sdlrenderer3.cpp
+    )
+    target_include_directories(imgui PUBLIC third_party/imgui)
+    target_link_libraries(imgui PUBLIC SDL3::SDL3)
+
+    # 第三方代码，关掉警告
+    if(MSVC)
+        target_compile_options(imgui PRIVATE /w)
+    else()
+        target_compile_options(imgui PRIVATE -w)
+    endif()
+
+    add_executable(gunlab_gui src/gui/main_gui.cpp)
+    target_link_libraries(gunlab_gui PRIVATE gunlab_core imgui)
+    # 自己接管 main（否则 MinGW 下 SDL3 会重定向到 SDL_main）
+    target_compile_definitions(gunlab_gui PRIVATE SDL_MAIN_HANDLED)
+
+    set_target_properties(gunlab_gui PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY         "${CMAKE_BINARY_DIR}"
+        RUNTIME_OUTPUT_DIRECTORY_DEBUG   "${CMAKE_BINARY_DIR}"
+        RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}"
+    )
+else()
+    message(STATUS "未找到 SDL3 —— 跳过图形界面版，只构建命令行版")
+endif()
+
 # ---- 输出路径 ---------------------------------------------------------------
 # 让 exe 直接落在 build/ 下，而不是 build/Debug/ 之类的子目录（Visual Studio
 # 这类多配置生成器会有子目录，Ninja/Make 不会）。统一一下，方便脚本调用。
