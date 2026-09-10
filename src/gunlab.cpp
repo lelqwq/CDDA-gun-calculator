@@ -23,6 +23,7 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <random>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -466,6 +467,52 @@ static double missed_by(double total_dispersion, double range_tiles, double targ
     return std::min(1.0, iso_tangent(range_tiles, total_dispersion) / target_size);
 }
 
+// ---- 3.11b 命中档位概率 -----------------------------------------------------
+// 复刻 dispersion_sources::roll()（src/dispersion.cpp）：
+//   枪身散布是**正态源**：rng_normal(D) = 正态(均值 D/2, 标准差 D/4)，钳制到 [0,D]
+//   其余散布源都是**均匀源**：rng_float(0, s)
+//   （dispersion_sources 的构造函数把第一个源放进 normal_sources，
+//     add_range 加的进 linear_sources —— 见 src/dispersion.h）
+// 最后取 min(总和, 3600)。
+static double roll_dispersion(const Gun& g, const Character& c, const Ammo* ammo,
+                              double recoil, std::mt19937& rng)
+{
+    double r = 0.0;
+
+    // 正态源：枪身 + 弹药散布（已 ÷18）
+    const double gun_disp = gun_dispersion(g, ammo);
+    if (gun_disp > 0.0) {
+        std::normal_distribution<double> nd(gun_disp / 2.0, gun_disp / 4.0);
+        r += std::min(std::max(nd(rng), 0.0), gun_disp);
+    }
+
+    // 线性源：敏捷修正、技能不足惩罚、当前瞄准误差
+    std::uniform_real_distribution<double> ud(0.0, 1.0);
+    const double dexmod = (c.dex - 8.0) * 1.0;
+    if (dexmod > 0.0) r += ud(rng) * dexmod;
+
+    const double avg = c.avg_skill(g.skill);
+    const double ref = (g.skill == "archery") ? 450.0 / GUN_DISPERSION_DIVIDER
+                                              : 300.0 / GUN_DISPERSION_DIVIDER;
+    const double sp = dispersion_from_skill(avg, ref);
+    if (sp > 0.0) r += ud(rng) * sp;
+
+    if (recoil > 0.0) r += ud(rng) * recoil;
+
+    return std::min(r, 3600.0);
+}
+
+// 未命中度 -> 档位序号（0 最好，5 最差）
+static int tier_index(double missed_by)
+{
+    if (missed_by >= ACC_GRAZING)  return 5;   // 脱靶
+    if (missed_by >= ACC_STANDARD) return 4;   // 擦伤
+    if (missed_by >= ACC_GOODHIT)  return 3;   // 普通
+    if (missed_by >= ACC_CRITICAL) return 2;   // 好击
+    if (missed_by >= ACC_HEADSHOT) return 1;   // 暴击
+    return 0;                                   // 爆头
+}
+
 // ---- 3.12 命中档位  game_constants.h:96 / creature.cpp:1193 -----------------
 // 阈值用上面的 ACC_* 常量，档位名称用 zh::hit_tier()（见 zh_cn.h）
 static const char* hit_tier(double missed_by)
@@ -748,6 +795,60 @@ static void print_dispersion_impact(const Gun& g, const Character& c, const Ammo
         std::cout << "\n";
     }
     std::cout << NOTE_TIER << (int)precise_disp << NOTE_TIER2;
+}
+
+// ---- 命中档位概率表 ----------------------------------------------------------
+// 对每个瞄准档位采样一批散布掷骰，再对每个距离换算成未命中度、统计各档位占比。
+// 散布的掷骰与距离无关，所以每档只采样一次，各距离复用同一批样本。
+static void print_hit_probabilities(const Gun& g, const Character& c, const Ammo* ammo)
+{
+    using namespace zh::t;
+
+    const int    N         = 200000;
+    const double TARGET    = 1.0;     // 目标体积（格）
+    const double distances[] = { 1, 2, 5, 10, 20, 30, 40 };
+    const char  *tier_names[6] = { "爆头", "暴击", "好击", "普通", "擦伤", "脱靶" };
+
+    AimContext ctx;
+    ctx.len_factor = 1.0;
+    const AimResult ar = simulate_aim(g, c, ctx);
+
+    const struct { const char *name; double thr; } lvs[] = {
+        { zh::AIM_LEVEL_0, MAX_RECOIL },
+        { zh::AIM_LEVEL_1, ar.regular_th },
+        { zh::AIM_LEVEL_2, ar.careful_th },
+        { zh::AIM_LEVEL_3, ar.precise_th },
+    };
+
+    std::cout << HDR_PROB << NOTE_PROB;
+
+    std::mt19937 rng( 20260910u );   // 固定种子 —— 结果可复现，方便反复对照
+    std::vector<double> samples( N );
+
+    for( const auto &lv : lvs ) {
+        for( int i = 0; i < N; i++ ) {
+            samples[i] = roll_dispersion( g, c, ammo, lv.thr, rng );
+        }
+
+        std::cout << "\n  ── " << lv.name << " ──\n  " << pad( C_DIST, 9 );
+        for( const char *t : tier_names ) std::cout << pad( t, 9 );
+        std::cout << "\n  " << std::string( 63, '-' ) << "\n";
+
+        for( double d : distances ) {
+            long cnt[6] = { 0, 0, 0, 0, 0, 0 };
+            for( int i = 0; i < N; i++ ) {
+                cnt[tier_index( missed_by( samples[i], d, TARGET ) )]++;
+            }
+            std::cout << "  " << pad( std::to_string( (int)d ) + " 格", 9 );
+            for( int t = 0; t < 6; t++ ) {
+                char buf[16];
+                std::snprintf( buf, sizeof( buf ), "%.1f%%", 100.0 * cnt[t] / N );
+                std::cout << pad( buf, 9 );
+            }
+            std::cout << "\n";
+        }
+    }
+    std::cout << "\n" << NOTE_PROB2;
 }
 
 // print_mod_catalog() 已移除：它不按枪过滤，列的是全部 170 个配件，
@@ -1186,6 +1287,7 @@ static void ui_detail()
     print_gun_summary(gun, ch, ammo);
     print_aim_timeline(gun, ch, ammo);
     print_dispersion_impact(gun, ch, ammo);
+    print_hit_probabilities(gun, ch, ammo);
     // 配件库不再输出 —— 装配界面已按枪过滤并分组，全量列表没有参考价值
 }
 

@@ -263,6 +263,16 @@ inline const char *CMP_NOTE      =
     "      不同口径之间这一列不可直接横向比较。\n";
 inline const char *CMP_NO_AMMO   = "（无适配弹药）";
 
+// ---- 命中档位概率 ----
+inline const char *HDR_PROB      = "\n================= 命中档位概率 =================\n";
+inline const char *NOTE_PROB     =
+    "  （对指定距离的目标开一枪，各命中档位出现的概率。\n"
+    "    目标体积按 1.0 格，每档采样 20 万次；结果固定，不会每次运行都变）\n";
+inline const char *C_DIST        = "距离";
+inline const char *NOTE_PROB2    =
+    "  判定阈值（未命中度，越小越准）：爆头 0.1 / 暴击 0.2 / 好击 0.5 / "
+    "普通 0.8 / 擦伤 1.0 / 脱靶 ≥1.0\n";
+
 // ---- 主流程 ----
 inline const char *PROMPT_PICK   = "\n选择枪械：";   // 注意：pick() 会自行补一个换行
 inline const char *PROMPT_SEL    = "  选择> ";
