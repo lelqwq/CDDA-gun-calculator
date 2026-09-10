@@ -158,15 +158,6 @@ inline const char *NOTE_TIER2    =
     "；命中判定：未命中度 = 横向偏移 ÷ 目标体积，"
     "横向偏移 = tan(误差角÷2) × 距离 × 2，见源码 ballistics.cpp 第 224 行）\n";
 
-// ---- 配件库 ----
-inline const char *HDR_CATALOG   = "\n================= 配件库 =================\n";
-inline const char *C_NAME        = "名称";
-inline const char *C_SLOT        = "槽位";
-inline const char *C_HANDLING    = "操控+";
-inline const char *C_AIM         = "瞄准+";
-inline const char *C_DISP        = "散布";
-inline const char *C_FOV         = "视野";
-
 // ---- 装配对话框 ----
 inline const char *SLOTS_LINE    =
     "\n  可安装槽位: 导轨 / 瞄具 / 管下 / 枪口 / 枪托 / 枪托配件 / 枪管 / 机械\n";

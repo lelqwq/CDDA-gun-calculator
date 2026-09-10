@@ -721,24 +721,8 @@ static void print_dispersion_impact(const Gun& g, const Character& c, const Ammo
     std::cout << NOTE_TIER << (int)precise_disp << NOTE_TIER2;
 }
 
-static void print_mod_catalog()
-{
-    using namespace zh::t;
-
-    std::cout << HDR_CATALOG;
-    std::cout << "  " << pad(C_NAME, 24) << pad(C_SLOT, 16) << pad(C_HANDLING, 8)
-              << pad(C_AIM, 8) << pad(C_DISP, 8) << C_FOV << "\n";
-    std::cout << "  " << std::string(74, '-') << "\n";
-    for (auto& m : g_mods) {
-        if (m.handling_modifier == 0 && m.aim_speed_modifier == 0) continue;
-        std::ostringstream h, a, s, f;
-        h << m.handling_modifier; a << m.aim_speed_modifier;
-        s << (m.sight_dispersion < 0 ? "-" : std::to_string((int)m.sight_dispersion));
-        f << (m.field_of_view   < 0 ? "-" : std::to_string((int)m.field_of_view));
-        std::cout << "  " << pad(m.name, 24) << pad(zh::slot(m.location), 16)
-                  << pad(h.str(), 8) << pad(a.str(), 8) << pad(s.str(), 8) << f.str() << "\n";
-    }
-}
+// print_mod_catalog() 已移除：它不按枪过滤，列的是全部 170 个配件，
+// 与装配界面（已按枪过滤并按槽位分组）重复且更有误导性。
 
 // =============================================================================
 //  第 6 部分：主程序
@@ -1173,7 +1157,7 @@ static void ui_detail()
     print_gun_summary(gun, ch, ammo);
     print_aim_timeline(gun, ch, ammo);
     print_dispersion_impact(gun, ch, ammo);
-    print_mod_catalog();
+    // 配件库不再输出 —— 装配界面已按枪过滤并分组，全量列表没有参考价值
 }
 
 // =============================================================================
