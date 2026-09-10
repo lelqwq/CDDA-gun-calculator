@@ -149,8 +149,12 @@ inline const char *U_TILE        = " 格";
 inline const char *HDR_INSTANCE  = "\n  实例：瞄到各档位后的表现（目标体积按 1.0 格的人形怪计算）\n\n";
 inline const char *C_AIMLEVEL    = "瞄准程度";
 inline const char *C_RECOIL      = "瞄准误差";
+inline const char *C_FIXDISP     = "固定散布";
 inline const char *C_TOTDISP     = "总散布";
 inline const char *C_50RANGE     = "50%好击距离";
+inline const char *NOTE_DISP_COL =
+    "  （总散布 = 瞄准误差 + 固定散布。固定散布不随瞄准进度变化，"
+    "由枪身+弹药散布 ÷18、敏捷修正、技能不足惩罚三项相加而来）\n";
 inline const char *HDR_TIER      = "\n  命中档位 vs 距离（分别用各档的总散布；距离越远越差）\n\n";
 inline const char *C_RANGE       = "距离";
 inline const char *NOTE_TIER     = "\n  （精准档总散布 = ";

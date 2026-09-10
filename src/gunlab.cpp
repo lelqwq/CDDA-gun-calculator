@@ -690,18 +690,23 @@ static void print_dispersion_impact(const Gun& g, const Character& c, const Ammo
         { zh::AIM_LEVEL_3, limit },
     };
 
+    // 「固定散布」= 与瞄准进度无关的那部分 = 枪身+弹药散布(÷18) + 敏捷修正 + 技能惩罚
+    const double fixed_disp = get_weapon_dispersion(g, c, ammo);
+
     std::cout << HDR_INSTANCE;
-    std::cout << "  " << pad(C_AIMLEVEL, 12) << pad(C_RECOIL, 12) << pad(C_TOTDISP, 10)
-              << pad(C_50RANGE, 16) << "\n";
-    std::cout << "  " << std::string(52, '-') << "\n";
+    std::cout << "  " << pad(C_AIMLEVEL, 12) << pad(C_RECOIL, 12) << pad(C_FIXDISP, 12)
+              << pad(C_TOTDISP, 10) << pad(C_50RANGE, 16) << "\n";
+    std::cout << "  " << std::string(64, '-') << "\n";
     for (auto& L : levels) {
-        const double total = total_gun_dispersion(g, c, ammo, L.recoil);
+        const double total = fixed_disp + L.recoil;
         const int rng = range_with_even_chance_of_good_hit(total);
         std::cout << "  " << pad(L.label, 12)
                   << pad(std::to_string((int)L.recoil), 12)
+                  << pad(std::to_string((int)fixed_disp), 12)
                   << pad(std::to_string((int)total), 10)
                   << pad(rng >= table_size ? "59 格以上" : (std::to_string(rng) + U_TILE), 16) << "\n";
     }
+    std::cout << NOTE_DISP_COL;
 
     std::cout << HDR_TIER;
     const double precise_disp = total_gun_dispersion(g, c, ammo, limit);
