@@ -283,6 +283,41 @@ static double recoil_absorb(double skill)
     return std::min(skill, double(MAX_SKILL)) / 20.0;
 }
 
+// ---- 3.8b 游戏界面显示的数值  item_info.cpp:1252/1270/1287/1297 ---------------
+// 游戏物品界面里的枪械数值一律是「内部值 ÷ 100」，而且散布不除以
+// GUN_DISPERSION_DIVIDER。所以它和 gunlab 里参与公式的值不是一个刻度。
+// 这几个函数专门用来和游戏界面对照 —— 数字一样就说明整条链路没出错。
+static double game_dispersion_moa(const Gun& g, const Ammo* ammo)
+{
+    // 对应 item::gun_dispersion( with_ammo=true, with_scaling=false ) / 100
+    double raw = g.dispersion;
+    for (auto& m : g.mods) raw += m.dispersion_modifier;
+    if (ammo) raw += ammo->dispersion;
+    return raw / 100.0;
+}
+// 游戏显示的是"腰射极限"与"有效瞄具散布"中较小的那个（item_info.cpp:1269），
+// 正好就是瞄准精度上限。
+// 已知细微差异：DISABLE_SIGHTS 的枪，游戏仍用 300 参与计算有效瞄具散布
+// （item_gun_tool_ammo.cpp:1225），而 gunlab 直接跳过铁瞄。因为 300 远大于
+// 腰射极限，取 min 后结果一致，所以实际数字仍然对得上。
+static double game_sight_dispersion_moa(const Gun& g, const Character& c)
+{
+    return most_accurate_aiming_method_limit(g, c) / 100.0;
+}
+static double game_recoil_moa(const Gun& g, const Character& c, const Ammo* ammo)
+{
+    return gun_recoil(g, c.str, ammo ? ammo->recoil : 0.0) / 100.0;
+}
+static double game_recoil_bipod_moa(const Gun& g, const Character& c, const Ammo* ammo)
+{
+    return gun_recoil(g, c.str, ammo ? ammo->recoil : 0.0, true) / 100.0;
+}
+static double game_min_recoil_moa(const Gun& g, const Character& c, const Ammo* ammo)
+{
+    // 对应 gun_recoil( ..., bipod=true, ideal_strength=true ) / 100
+    return gun_recoil(g, c.str, ammo ? ammo->recoil : 0.0, true, true) / 100.0;
+}
+
 // ---- 3.9 散布合成 -----------------------------------------------------------
 // item::gun_dispersion  item_gun_tool_ammo.cpp:1192
 static double gun_dispersion(const Gun& g, const Ammo* ammo,
@@ -519,6 +554,17 @@ static void print_gun_summary(const Gun& g, const Character& c, const Ammo* ammo
     std::cout << "\n";
     std::cout << LBL_ADDREC << (int)added_recoil_per_shot(gr_hip, recoil_absorb(c.skill_level))
               << NOTE_ABSORB << std::setprecision(0) << recoil_absorb(c.skill_level) * 100 << PCT_CLOSE;
+
+    // 游戏界面显示值 —— 照着游戏里同一把枪的数值核对
+    std::cout << HDR_GAMEVAL;
+    std::cout << std::fixed << std::setprecision(2);
+    std::cout << GV_DISP  << game_dispersion_moa(g, ammo) << GV_UNIT;
+    std::cout << GV_SIGHT << game_sight_dispersion_moa(g, c) << GV_UNIT;
+    std::cout << GV_RECOIL << game_recoil_moa(g, c, ammo) << GV_UNIT;
+    if (g.has_mod("underbarrel")) {
+        std::cout << GV_RECOIL_BIP << game_recoil_bipod_moa(g, c, ammo) << GV_UNIT;
+    }
+    std::cout << GV_THEO << game_min_recoil_moa(g, c, ammo) << GV_UNIT;
 }
 
 static void print_aim_timeline(const Gun& g, const Character& c, const Ammo* ammo)
@@ -948,11 +994,12 @@ static void print_compare_table(const std::vector<int>& sel, const Character& ba
                   base_ch.marksmanship_level, base_ch.dex, base_ch.per);
     std::cout << buf;
 
-    std::cout << "\n  " << pad(CMP_HEAD_GUN, 26) << pad(CMP_HEAD_SKILL, 8)
-              << pad(CMP_HEAD_AMMO, 24) << pad(CMP_HEAD_DISP, 9) << pad(CMP_HEAD_SIGHT, 10)
-              << pad(CMP_HEAD_HAND, 7) << pad(CMP_HEAD_W, 10) << pad(CMP_HEAD_V, 10)
+    std::cout << "\n  " << pad(CMP_HEAD_GUN, 24) << pad(CMP_HEAD_SKILL, 8)
+              << pad(CMP_HEAD_AMMO, 22) << pad(CMP_HEAD_DISP, 8) << pad(CMP_HEAD_GDISP, 10)
+              << pad(CMP_HEAD_SIGHT, 10) << pad(CMP_HEAD_HAND, 6)
+              << pad(CMP_HEAD_W, 10) << pad(CMP_HEAD_V, 10)
               << pad(CMP_HEAD_REC, 11) << CMP_HEAD_AIM << "\n";
-    std::cout << "  " << std::string(120, '-') << "\n";
+    std::cout << "  " << std::string(132, '-') << "\n";
 
     for (int gi : sel) {
         const Gun& g = g_guns[gi];
@@ -970,11 +1017,15 @@ static void print_compare_table(const std::vector<int>& sel, const Character& ba
                                                         recoil_absorb(ch.skill_level)))
             : "—";
 
-        std::cout << "  " << pad(g.name, 26) << pad(zh::skill(g.skill), 8)
-                  << pad(a ? a->name : std::string(CMP_NO_AMMO), 24)
-                  << pad(std::to_string((int)gun_dispersion(g, a)), 9)
+        char gbuf[32];
+        std::snprintf(gbuf, sizeof(gbuf), "%.2f", game_dispersion_moa(g, a));
+
+        std::cout << "  " << pad(g.name, 24) << pad(zh::skill(g.skill), 8)
+                  << pad(a ? a->name : std::string(CMP_NO_AMMO), 22)
+                  << pad(std::to_string((int)gun_dispersion(g, a)), 8)
+                  << pad(gbuf, 10)
                   << pad(std::to_string((int)g.sight_dispersion), 10)
-                  << pad(std::to_string((int)g.handling), 7)
+                  << pad(std::to_string((int)g.handling), 6)
                   << pad(std::to_string((int)effective_weight(g)) + " g", 10)
                   << pad(std::to_string((int)effective_volume(g)) + " ml", 10)
                   << pad(rec, 11)

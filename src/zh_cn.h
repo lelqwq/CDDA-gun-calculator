@@ -200,6 +200,18 @@ inline const char *SEARCH_ADDED  = "    已加入：";
 inline const char *SEARCH_BAD    = "    编号超出范围\n";
 inline const char *SEARCH_MORE    = "  ...（还有 %d 把未列出，请用更具体的关键词）\n";
 
+// ---- 游戏内显示值（用于与游戏界面直接对照）----
+inline const char *HDR_GAMEVAL   =
+    "\n  --- 游戏内显示值 ---\n"
+    "  （以下是游戏物品界面里显示的数字，可直接照着核对；\n"
+    "    它们都是内部值 ÷ 100，与上面参与公式的数值不是一个刻度）\n";
+inline const char *GV_DISP       = "    散布 Dispersion            : ";
+inline const char *GV_SIGHT      = "    瞄准散布 Sight dispersion  : ";
+inline const char *GV_RECOIL     = "    实际后坐 Effective recoil  : ";
+inline const char *GV_RECOIL_BIP = "    两脚架架设时                : ";
+inline const char *GV_THEO       = "    理论最小后坐                : ";
+inline const char *GV_UNIT       = " MOA\n";
+
 // ---- 对比表 ----
 inline const char *CMP_TITLE     = "\n================= 枪械对比 =================\n";
 inline const char *CMP_ASSUME    =
@@ -209,6 +221,7 @@ inline const char *CMP_HEAD_GUN  = "枪械";
 inline const char *CMP_HEAD_SKILL= "技能";
 inline const char *CMP_HEAD_AMMO = "弹药";
 inline const char *CMP_HEAD_DISP = "枪散布";
+inline const char *CMP_HEAD_GDISP= "游戏散布";
 inline const char *CMP_HEAD_SIGHT= "瞄具散布";
 inline const char *CMP_HEAD_HAND = "操控";
 inline const char *CMP_HEAD_W    = "重量";
