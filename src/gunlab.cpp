@@ -48,6 +48,12 @@
 // 常量（MAX_RECOIL / MAX_SKILL / GUN_DISPERSION_DIVIDER / ACC_* 等）见 gun_data.h。
 // 数据结构（Gun / Ammo / GunMod / Character）与数据库见 gun_data.h / gun_data.cpp。
 
+// ---- 前向声明（定义在第 6 部分）---------------------------------------------
+// 枪 + 已装配件的合成值：重量、体积、口径都要参与计算，所以公式部分也要用。
+static std::vector<std::string> effective_ammo_types( const Gun &g );
+static double effective_weight( const Gun &g );
+static double effective_volume( const Gun &g );
+
 // =============================================================================
 //  第 1 部分：数学工具
 // =============================================================================
@@ -250,8 +256,8 @@ static int gun_recoil(const Gun& g, double arm_str, double ammo_recoil,
     if (ammo_recoil <= 0) return 0;   // 没有弹药就没有后坐（DDA 的后坐全部来自弹药）
 
     const double wt = ideal_strength
-                    ? g.weight_g / 333.0
-                    : std::min(g.weight_g, arm_str * 333.0) / 333.0;
+                    ? effective_weight(g) / 333.0
+                    : std::min(effective_weight(g), arm_str * 333.0) / 333.0;
 
     double handling = g.handling;
     for (auto& m : g.mods) {
@@ -384,7 +390,7 @@ static AimResult simulate_aim(const Gun& g, const Character& c, AimContext ctx,
 {
     AimResult res;
     ctx.limit = most_accurate_aiming_method_limit(g, c);
-    ctx.vol_factor = aim_factor_from_volume(g, g.volume_ml);
+    ctx.vol_factor = aim_factor_from_volume(g, effective_volume(g));
     // ctx.len_factor 由调用方设置
 
     const double sd = ctx.limit;
@@ -467,8 +473,10 @@ static void print_gun_summary(const Gun& g, const Character& c, const Ammo* ammo
     std::cout << HDR_GUN;
     std::cout << "  " << g.name << "\n";
     std::cout << LBL_SKILL     << zh::skill(g.skill) << "\n";
-    std::cout << LBL_WEIGHT    << g.weight_g << " g\n";
-    std::cout << LBL_VOLUME    << g.volume_ml << " ml\n";
+    std::cout << LBL_WEIGHT    << effective_weight(g) << " g\n";
+    std::cout << LBL_VOLUME    << effective_volume(g) << " ml";
+    if (!g.mods.empty()) std::cout << "   （含已装配件）";
+    std::cout << "\n";
     std::cout << LBL_DISP_RAW  << g.dispersion << "\n";
     std::cout << LBL_DISP_REAL << gun_dispersion(g, ammo) << NOTE_DIV18;
     std::cout << LBL_SIGHT     << g.sight_dispersion << NOTE_NO_DIV18;
@@ -497,7 +505,7 @@ static void print_gun_summary(const Gun& g, const Character& c, const Ammo* ammo
     std::cout << LBL_HIPLIMIT << point_shooting_limit(c.skill(g.skill), g.skill == "archery") << "\n";
     std::cout << LBL_AIMLIMIT << limit << "\n";
     std::cout << LBL_VOLFACT << std::fixed << std::setprecision(3)
-              << aim_factor_from_volume(g, g.volume_ml) << NOTE_VOLFACT;
+              << aim_factor_from_volume(g, effective_volume(g)) << NOTE_VOLFACT;
     std::cout << LBL_LENFACT << aim_factor_from_length(g.longest_side_mm, false)
               << SEP_SLASH << aim_factor_from_length(g.longest_side_mm, true) << "\n";
     std::cout << LBL_TOTDISP << std::setprecision(1)
@@ -730,32 +738,107 @@ static const Ammo* pick_default_ammo(const Gun& g)
     return nullptr;
 }
 
+// ---- 枪的"类型"：用于匹配配件的 mod_targets  item_gun_tool_ammo.cpp:1136 ------
+static std::string gun_type_of(const Gun& g)
+{
+    if (g.skill == "archery") {
+        for (auto& t : g.ammo_types) if (icontains(t, "bolt")) return "crossbow";
+        return "bow";
+    }
+    return g.skill;
+}
+
+// 当前实际可用的槽位 = 枪自带 + 已装配件解锁的
+// （模块化枪械如 M4A1 的 rail/sights/muzzle 由上机匣的 add_mod 提供）
+static std::vector<std::string> available_slots(const Gun& g)
+{
+    std::vector<std::string> s = g.mod_slots;
+    for (auto& m : g.mods) {
+        for (auto& a : m.add_mod) {
+            if (std::find(s.begin(), s.end(), a) == s.end()) s.push_back(a);
+        }
+    }
+    return s;
+}
+
+// 配件能否装在这把枪上  item_gun_tool_ammo.cpp:3066
+//   槽位要对得上，且 mod_targets 里要有这把枪的"类型"或它的具体 id
+static bool mod_fits_gun(const Gun& g, const GunMod& m)
+{
+    const std::vector<std::string> slots = available_slots(g);
+    if (std::find(slots.begin(), slots.end(), m.location) == slots.end()) return false;
+    if (m.mod_targets.empty()) return false;
+    const std::string gt = gun_type_of(g);
+    for (auto& t : m.mod_targets) {
+        if (t == gt || t == g.id) return true;
+    }
+    return false;
+}
+
+// 枪 + 已装配件 的有效重量 / 体积（游戏的 item 会累加配件）
+static double effective_weight(const Gun& g)
+{
+    double w = g.weight_g;
+    for (auto& m : g.mods) w += m.weight_g;
+    return w;
+}
+static double effective_volume(const Gun& g)
+{
+    double v = g.volume_ml;
+    for (auto& m : g.mods) v += m.volume_ml;
+    return v;
+}
+
+// ---- 装配界面：只列兼容配件，按槽位分组 --------------------------------------
+// （同槽位的配件挨在一起，一眼看出哪几个在抢同一个位置）
 static void equip_dialog(Gun& g)
 {
     using namespace zh::t;
 
-    std::cout << SLOTS_LINE;
-    std::cout << SLOTS_NOTE;
-
-    std::cout << MODLIST_HDR;
-    for (size_t i = 0; i < g_mods.size(); i++) {
-        std::cout << "    " << pad(std::to_string(i), 4) << pad(g_mods[i].name, 24)
-                  << pad(zh::slot(g_mods[i].location), 16)
-                  << DLG_HANDLING << std::showpos << (int)g_mods[i].handling_modifier << std::noshowpos
-                  << DLG_AIM << std::showpos << (int)g_mods[i].aim_speed_modifier << std::noshowpos;
-        if (g_mods[i].sight_dispersion >= 0) std::cout << DLG_DISP << (int)g_mods[i].sight_dispersion;
-        if (g_mods[i].field_of_view   >= 0) std::cout << DLG_FOV << (int)g_mods[i].field_of_view;
-        std::cout << "\n";
-    }
-
     while (true) {
+        // 收集兼容配件，并建立"显示编号 -> g_mods 下标"的映射
+        std::vector<int> shown;
+        for (size_t i = 0; i < g_mods.size(); i++) {
+            if (mod_fits_gun(g, g_mods[i])) shown.push_back((int)i);
+        }
+
+        const std::vector<std::string> slots = available_slots(g);
+        std::cout << SLOTS_LINE;
+        if (shown.empty()) {
+            std::cout << "  （这把枪当前没有可用配件）\n";
+            return;
+        }
+
+        std::cout << "\n  可选配件（共 " << shown.size() << " 个，按槽位分组；"
+                     "输入编号加入，同槽位自动替换）：\n";
+        // ★ display[n] = 第 n 个"显示出来的"配件在 g_mods 里的下标
+        //   显示顺序按槽位分组，与 shown 的顺序不同，必须单独记录，
+        //   否则用户输入的编号会选到错误的配件。
+        std::vector<int> display;
+        for (auto& slot : slots) {
+            bool head = false;
+            for (int gi : shown) {
+                if (g_mods[gi].location != slot) continue;
+                if (!head) { std::cout << "\n  ── " << zh::slot(slot) << " ──\n"; head = true; }
+                const GunMod& m = g_mods[gi];
+                std::cout << "    " << pad(std::to_string(display.size()), 4) << pad(m.name, 26)
+                          << DLG_HANDLING << std::showpos << (int)m.handling_modifier << std::noshowpos
+                          << DLG_AIM << std::showpos << (int)m.aim_speed_modifier << std::noshowpos;
+                if (m.sight_dispersion >= 0) std::cout << DLG_DISP << (int)m.sight_dispersion;
+                if (m.field_of_view   >= 0) std::cout << DLG_FOV << (int)m.field_of_view;
+                if (!m.ammo_modifier.empty()) std::cout << "  " << m.ammo_modifier[0];
+                std::cout << "\n";
+                display.push_back(gi);
+            }
+        }
+
         const std::string s = read_line(PROMPT_MODID, "");
         if (s.empty()) break;
         int v;
         try { v = std::stoi(s); } catch (...) { break; }
         if (v < 0) break;
-        if (v < (int)g_mods.size()) {
-            const GunMod nm = g_mods[v];
+        if (v < (int)display.size()) {
+            const GunMod nm = g_mods[display[v]];
             const size_t before = g.mods.size();
             g.mods.erase(std::remove_if(g.mods.begin(), g.mods.end(),
                          [&](const GunMod& x){ return x.location == nm.location; }), g.mods.end());
@@ -879,8 +962,8 @@ static void print_compare_table(const std::vector<int>& sel, const Character& ba
                   << pad(std::to_string((int)gun_dispersion(g, a)), 9)
                   << pad(std::to_string((int)g.sight_dispersion), 10)
                   << pad(std::to_string((int)g.handling), 7)
-                  << pad(std::to_string((int)g.weight_g) + " g", 10)
-                  << pad(std::to_string((int)g.volume_ml) + " ml", 10)
+                  << pad(std::to_string((int)effective_weight(g)) + " g", 10)
+                  << pad(std::to_string((int)effective_volume(g)) + " ml", 10)
                   << pad(rec, 11)
                   << (r.moves_to_regular >= 0 ? std::to_string(r.moves_to_regular) + " 行动点" : "—")
                   << "\n";

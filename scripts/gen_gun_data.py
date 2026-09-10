@@ -437,8 +437,13 @@ def main():
         ammo_mod = [a for a in (r.get("ammo_modifier") or []) if isinstance(a, str)]
         targets = [t for t in (r.get("mod_targets") or []) if isinstance(t, str)]
         flags = [x for x in (r.get("flags") or []) if isinstance(x, str)]
+        # add_mod：装上后解锁的槽位，如 [[ "rail", 2 ], [ "sights", 1 ]]
+        added = []
+        for pair in (r.get("add_mod") or []):
+            if isinstance(pair, list) and pair and isinstance(pair[0], str):
+                added.append(pair[0])
         lines.append(
-            '    add_gunmod(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);'
+            '    add_gunmod(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);'
             % (
                 cstr(oid), cstr(name_zh), cstr(name_en), cstr(loc),
                 fnum(parse_unit(r.get("handling_modifier"), {}, 0)),
@@ -451,7 +456,7 @@ def main():
                 "true" if "BIPOD" in flags else "false",
                 "true" if "LASER_SIGHT" in flags else "false",
                 "true" if "ZOOM" in flags else "false",
-                cvec(ammo_mod), cvec(targets),
+                cvec(ammo_mod), cvec(targets), cvec(added),
                 cstr(db.src_of.get(oid, "core")),
             ))
 
@@ -462,7 +467,7 @@ def main():
         f.write(FIELDS_NOTE % ("id, name, name_en, location, handling_modifier, "
                                "dispersion_modifier, aim_speed_modifier, sight_dispersion, "
                                "field_of_view, weight_g, volume_ml, bipod, laser_sight, zoom, "
-                               "ammo_modifier, mod_targets, source"))
+                               "ammo_modifier, mod_targets, add_mod, source"))
         f.write("\n")
         f.write("\n".join(lines))
         f.write("\n}\n")

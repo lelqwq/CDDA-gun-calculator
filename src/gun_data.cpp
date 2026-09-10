@@ -89,6 +89,7 @@ void add_gunmod( const char *id, const char *name, const char *name_en, const ch
                  bool laser_sight, bool zoom,
                  std::initializer_list<const char *> ammo_modifier,
                  std::initializer_list<const char *> mod_targets,
+                 std::initializer_list<const char *> add_mod,
                  const char *source )
 {
     GunMod m;
@@ -111,6 +112,7 @@ void add_gunmod( const char *id, const char *name, const char *name_en, const ch
 
     for( const char *s : ammo_modifier ) m.ammo_modifier.push_back( s ? s : "" );
     for( const char *s : mod_targets  ) m.mod_targets.push_back( s ? s : "" );
+    for( const char *s : add_mod      ) m.add_mod.push_back( s ? s : "" );
 
     g_mods.push_back( m );
 }

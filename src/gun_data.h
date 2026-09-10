@@ -59,6 +59,7 @@ struct GunMod {
 
     std::vector<std::string> ammo_modifier;  // 上机匣提供的口径（模块化枪械用）
     std::vector<std::string> mod_targets;    // 可装的枪类型或具体枪械 id
+    std::vector<std::string> add_mod;        // 装上后解锁的槽位（上机匣提供 rail/sights 等）
 
     std::string source;                      // "core" 或 mod 名
 };
@@ -172,6 +173,7 @@ void add_gunmod( const char *id, const char *name, const char *name_en, const ch
                  bool laser_sight, bool zoom,
                  std::initializer_list<const char *> ammo_modifier,
                  std::initializer_list<const char *> mod_targets,
+                 std::initializer_list<const char *> add_mod,
                  const char *source );
 
 // 生成的代码（定义在 src/generated/ 下）
