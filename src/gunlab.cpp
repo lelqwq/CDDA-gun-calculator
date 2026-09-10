@@ -717,23 +717,36 @@ static std::vector<int> ammo_for_gun(const Gun& g)
     return out;
 }
 
-// 该枪的"标准弹"。
-// 口径名和弹药 id 不一定对应（如口径 "9x19mm" 对应 id "9mm_fmj"），
-// 所以按优先级找：id 完全等于口径 → id 含 "fmj" → 该口径下第一种子弹。
-// 选 FMJ 是因为它是各口径下最常见的基准弹。
+// 该枪的"标准弹"。选全金属被甲弹（FMJ）—— 它是各口径下最常见的基准弹。
+//
+// 识别比想象中麻烦：
+//   · 口径名和弹药 id 不一定对应（口径 "9x19mm" ↔ id "9mm_fmj"）
+//   · 也不是每种口径都有叫 "fmj" 的（762 口径是 "762_jhp" 和 "762_m87"，
+//     后者才是被甲弹，用的是南斯拉夫 M87 编号）
+// 所以按这个优先级找：id 等于口径 → id 含 fmj / 名称含「被甲」
+//   → 排除 jhp / 「空尖」后的第一个 → 该口径下第一个
 static const Ammo* pick_default_ammo(const Gun& g)
 {
     for (auto& t : effective_ammo_types(g)) {
-        const Ammo* first = nullptr;
-        const Ammo* fmj   = nullptr;
+        const Ammo* first   = nullptr;
+        const Ammo* fmj     = nullptr;
+        const Ammo* non_jhp = nullptr;
         for (auto& a : g_ammo) {
             if (a.ammo_type != t) continue;
             if (!first) first = &a;
             if (a.id == t) return &a;
-            if (!fmj && icontains(a.id, "fmj")) fmj = &a;
+
+            const bool is_jhp = icontains(a.id, "jhp") || a.name.find("空尖") != std::string::npos;
+            if (!is_jhp) {
+                if (!non_jhp) non_jhp = &a;
+                if (!fmj && (icontains(a.id, "fmj") || a.name.find("被甲") != std::string::npos)) {
+                    fmj = &a;
+                }
+            }
         }
-        if (fmj)   return fmj;
-        if (first) return first;
+        if (fmj)     return fmj;
+        if (non_jhp) return non_jhp;
+        if (first)   return first;
     }
     return nullptr;
 }
