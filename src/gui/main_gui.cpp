@@ -94,6 +94,14 @@ constexpr float GAP     = 18.0f;
 // 曲线横轴（瞄准回合）的最大值。多条曲线共用一个横轴，所以是定长。
 constexpr int CURVE_MAX_TURNS = 8;
 
+// ---- 左右分栏 ---------------------------------------------------------------
+// 列表宽度可拖。上下限的意义：列表窄到 200 就看不清枪名了；
+// 详情面板窄到 360 那些「标签 —— 数值」的行会折行。
+float g_list_width = 380.0f;
+constexpr float LIST_MIN_W   = 200.0f;
+constexpr float DETAIL_MIN_W = 360.0f;
+constexpr float SPLITTER_W   = 8.0f;
+
 // 逐发明细表最多列几发（游戏里有 50 发、100 发的高速全自动）
 constexpr int BURST_MAX_ROWS = 12;
 // 逐发明细里每发算概率用的采样数。概率表那边用 20 万，这里最多 12 发，
@@ -876,9 +884,54 @@ void draw_toolbar()
 
 // ---- 左侧：枪械列表 ---------------------------------------------------------
 
+// 列表与详情之间的可拖动分隔条。
+//
+// ImGui 没有现成的 splitter 控件（`SplitterBehavior` 在 imgui_internal.h 里，
+// 是内部 API，不用）。手写其实就三步：一个透明的 InvisibleButton 接住鼠标，
+// 拖动时按鼠标位移改宽度，再自己画一条线。
+// full_w 是分栏那一行的**总宽**（列表 + 分隔条 + 详情）。
+//
+// ★ 别在这里调 GetContentRegionAvail() —— 此时列表已经画完，拿到的是「剩下的」
+//   宽度，于是上限写成 `上限 = 剩余 − 360`，而剩余又随当前宽度变，成了循环依赖：
+//     w = (总宽 − w − 8) − 360  →  w ≈ 总宽的一半
+//   结果往右拖只能拖到一半就顶住了。必须由调用方把总宽传进来。
+void draw_splitter( float full_w )
+{
+    const float h = ImGui::GetContentRegionAvail().y;
+
+    ImGui::SameLine( 0.0f, 0.0f );
+    ImGui::InvisibleButton( "##vsplit", ImVec2( SPLITTER_W, h ) );
+
+    const bool active  = ImGui::IsItemActive();
+    const bool hovered = ImGui::IsItemHovered();
+    if( active ) {
+        g_list_width += ImGui::GetIO().MouseDelta.x;
+    }
+    // 夹在 [最小列表宽, 总宽 − 分隔条 − 最小详情宽] 之间
+    const float max_w = std::max( LIST_MIN_W, full_w - SPLITTER_W - DETAIL_MIN_W );
+    g_list_width = std::max( LIST_MIN_W, std::min( g_list_width, max_w ) );
+
+    if( active || hovered ) {
+        ImGui::SetMouseCursor( ImGuiMouseCursor_ResizeEW );
+    }
+
+    // 视觉：一条竖线，悬停变亮、拖动变粗
+    const ImVec2 p0 = ImGui::GetItemRectMin();
+    const ImVec2 p1 = ImGui::GetItemRectMax();
+    const float  x  = ( p0.x + p1.x ) * 0.5f;
+    ImGui::GetWindowDrawList()->AddLine(
+        ImVec2( x, p0.y ), ImVec2( x, p1.y ),
+        ImGui::GetColorU32( active  ? ImGuiCol_SeparatorActive
+                          : hovered ? ImGuiCol_SeparatorHovered
+                                    : ImGuiCol_Separator ),
+        active ? 3.0f : 1.0f );
+
+    ImGui::SameLine( 0.0f, 0.0f );
+}
+
 void draw_gun_list()
 {
-    ImGui::BeginChild( "list", ImVec2( 380, 0 ), ImGuiChildFlags_Borders );
+    ImGui::BeginChild( "list", ImVec2( g_list_width, 0 ), ImGuiChildFlags_Borders );
     if( ImGui::BeginTable( "guns", 3,
                            ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
                            ImGuiTableFlags_ScrollY | ImGuiTableFlags_Sortable |
@@ -1722,8 +1775,11 @@ void draw_ui()
     draw_toolbar();
     ImGui::Separator();
 
+    // 分栏那一行的总宽，要在画列表**之前**取 —— 之后取就只剩「剩余宽度」了，
+    // 见 draw_splitter 的说明
+    const float split_full_w = ImGui::GetContentRegionAvail().x;
     draw_gun_list();
-    ImGui::SameLine();
+    draw_splitter( split_full_w );
     draw_detail();
 
     ImGui::End();
