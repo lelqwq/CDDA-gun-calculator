@@ -737,13 +737,42 @@ void compute_detail( const Gun &g, const Ammo *ammo )
             for( int k = 0; k < TIER_PROB_N; k++ ) {
                 samples[k] = roll_dispersion( g, g_ch, ammo, TIER_ERR_STEPS[i], rng );
             }
-            long cnt[6] = { 0, 0, 0, 0, 0, 0 };
+            // 统计时**不直接用 tier_index** —— 那是纯按阈值分档，把「爆头」和
+            // 「暴击」当成了只要未命中度够低就必然发生。游戏里不是这样：
+            //
+            //   爆头档：要 goodhit < 0.1 **且**（命中头部 或 fatal_hit）。
+            //     命中头部要目标部位数据；fatal_hit = 伤害×暴击倍率 > 目标血量，
+            //     要伤害和血量。两样 gunlab 都没建模 —— 而且玩家作目标时那条
+            //     部位图路径在 goodhit < 0.1 下**永远选不中头**（躯干 36 的
+            //     权重把 value 全吃掉了），所以这一档实际主要来自 fatal_hit，
+            //     也就是「一枪能打死」。它依赖目标，本工具给不了。
+            //   暴击档：要 goodhit < 0.2 **且**过 crit_roll。crit_roll 可以算：
+            //     hit_roll ~ U(goodhit, 1)，判定是 hit_roll*0.5 < 0.2
+            //     即 hit_roll < 0.4，所以 P = (0.4 − g) / (1 − g)。
+            //     没过的那部分会**掉回好击**（代码是 else-if 链）。
+            //
+            // 所以这里统计的是一个「真实分布」：爆头恒为 0（给不出来），
+            // 暴击是过了 crit_roll 的真实比例，好击把没过的那些收进来。
+            double acc[6] = { 0, 0, 0, 0, 0, 0 };
             for( int k = 0; k < TIER_PROB_N; k++ ) {
-                cnt[tier_index( missed_by( samples[k], (double)g_tier_dist,
-                                           PROB_TARGET ) )]++;
+                const double g = missed_by( samples[k], (double)g_tier_dist,
+                                            PROB_TARGET );
+                if( g >= ACC_GRAZING ) {
+                    acc[5] += 1.0;
+                } else if( g >= ACC_STANDARD ) {
+                    acc[4] += 1.0;
+                } else if( g >= ACC_GOODHIT ) {
+                    acc[3] += 1.0;
+                } else if( g >= ACC_CRITICAL ) {
+                    acc[2] += 1.0;                       // 好击：不看额外判定
+                } else {
+                    const double p_crit = ( 0.4 - g ) / ( 1.0 - g );
+                    acc[1] += p_crit;                    // 暴击：过了 crit_roll
+                    acc[2] += 1.0 - p_crit;              // 没过的掉回好击
+                }
             }
             for( int t = 0; t < 6; t++ ) {
-                g_detail.tier_pct[t][i] = (double)cnt[t] / TIER_PROB_N;
+                g_detail.tier_pct[t][i] = acc[t] / TIER_PROB_N;
             }
         }
     }
@@ -1657,8 +1686,10 @@ void draw_tier_curve( const DetailCache &d )
         labels.push_back( fmt_str( "%.0f", e ) );
     }
 
+    // 从 1 开始 —— 0 是「爆头」，那个给不出来（见 compute_detail 里的说明），
+    // 恒为 0 的一条线画出来只会误导。
     std::vector<ChartSeries> series;
-    for( int t = 0; t < 6; t++ ) {
+    for( int t = 1; t < 6; t++ ) {
         series.push_back( { zh::hit_tier_short( t ), {}, TIER_COLORS[t] } );
         series.back().data.assign( d.tier_pct[t].begin(), d.tier_pct[t].end() );
         // 图上的纵轴用百分比，比 0~1 好读
