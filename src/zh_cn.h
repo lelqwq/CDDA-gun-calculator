@@ -210,6 +210,8 @@ inline const char *MODE_FMT_1    = "%s持续";                // 一次一发：
 inline const char *MODE_FMT_N    = "%s持续（%d 发）";        // 连发：「全自动持续（4 发）」
 
 inline const char *TIP_TURN      = "%d 回合";
+// 图的交互方式没有视觉提示，得写一句
+inline const char *CHART_OPS     = "图上：拖动平移 · 滚轮缩放 · 双击复位 · 拖下边缘改高度";
 inline const char *SUSTAINED_HINT =
     "「持续」= 反复「瞄这么多回合 → 开火」稳定下来的水平。它比「首次开火」准 —— 战斗刚开始时瞄准误差初值就是满的 3000，之后每轮只需从上一发打完的状态恢复。全自动那条若与「首次开火」重合，说明每轮后坐力都顶到了上限，等于每轮都从零开始";
 

@@ -28,6 +28,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <map>
 #include <random>
 #include <string>
 #include <vector>
@@ -93,6 +94,14 @@ constexpr float GAP     = 18.0f;
 
 // 曲线横轴（瞄准回合）的最大值。多条曲线共用一个横轴，所以是定长。
 constexpr int CURVE_MAX_TURNS = 8;
+
+// 所有数据表共用的标志。
+//
+// Resizable 让列宽可以拖 —— 这里的内容长短差异很大（枪名、配件名、
+// 「好击及以上 @10格」这种长表头），写死列宽总有被挤的时候。
+// 拖动要配 BordersInnerV 才有可抓的分隔线。
+constexpr ImGuiTableFlags TABLE_FLAGS =
+    ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Resizable;
 
 // ---- 左右分栏 ---------------------------------------------------------------
 // 列表宽度可拖。上下限的意义：列表窄到 200 就看不清枪名了；
@@ -312,6 +321,15 @@ struct ChartMark {
     double      y;
     const char *label;
 };
+
+// 每张图各自的可调状态：横向缩放、视野中心、高度。
+// 用图的 id 当键 —— 三张图共用一个 draw_line_chart，但状态要各管各的。
+struct ChartView {
+    float zoom   = 1.0f;    // 1 = 看全部；>1 = 放大
+    float cx     = 0.5f;    // 视野中心，归一化到数据下标（0~1）
+    float height = 0.0f;    // 0 = 用 ChartOpts::height 的默认值，拖过之后才有效
+};
+std::map<std::string, ChartView> g_chart_views;
 
 // 图上的一条线
 struct ChartSeries {
@@ -933,7 +951,7 @@ void draw_gun_list()
 {
     ImGui::BeginChild( "list", ImVec2( g_list_width, 0 ), ImGuiChildFlags_Borders );
     if( ImGui::BeginTable( "guns", 3,
-                           ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
+                           TABLE_FLAGS |
                            ImGuiTableFlags_ScrollY | ImGuiTableFlags_Sortable |
                            // 三态：升序 → 降序 → 取消。没有它就回不到默认顺序
                            // （按 id，即数据库顺序）了，只能重启程序
@@ -1044,7 +1062,7 @@ void draw_mods( const Gun &g )
     if( g.mods.empty() ) {
         ImGui::TextDisabled( "%s", zh::g::NO_MODS );
     } else if( ImGui::BeginTable( "mods", 7,
-                                  ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV ) ) {
+                                  TABLE_FLAGS )) {
         ImGui::TableSetupColumn( zh::g::COL_MOD_NAME, ImGuiTableColumnFlags_WidthStretch );
         ImGui::TableSetupColumn( zh::g::COL_MOD_SLOT, ImGuiTableColumnFlags_WidthFixed, 100 );
         ImGui::TableSetupColumn( zh::g::COL_HANDLING, ImGuiTableColumnFlags_WidthFixed, 64 );
@@ -1199,7 +1217,7 @@ void draw_aim_levels( const DetailCache &d )
     note( "%s", zh::g::NOTE_AIMLEVEL );
 
     if( ImGui::BeginTable( "aimlv", 3,
-                           ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV ) ) {
+                           TABLE_FLAGS )) {
         ImGui::TableSetupColumn( zh::g::COL_AIMLEVEL, ImGuiTableColumnFlags_WidthStretch );
         ImGui::TableSetupColumn( zh::g::COL_50RANGE, ImGuiTableColumnFlags_WidthFixed, 140 );
         ImGui::TableSetupColumn( zh::g::COL_AIMTIME, ImGuiTableColumnFlags_WidthFixed, 140 );
@@ -1280,13 +1298,48 @@ void draw_line_chart( const char *id, const std::vector<ChartSeries> &series,
     const std::vector<ChartMark> &marks =
         opts.marks ? *opts.marks : std::vector<ChartMark>{};
 
+    // 每张图各自的缩放/平移/高度，键是图的 id
+    ChartView &view = g_chart_views[id];
+
     const float  W      = std::max( 360.0f, ImGui::GetContentRegionAvail().x - 8.0f );
-    const float  H      = opts.height;
+    const float  H      = ( view.height > 0.0f ) ? view.height : opts.height;
     const ImVec2 origin = ImGui::GetCursorScreenPos();
 
     ImGui::InvisibleButton( id, ImVec2( W, H ) );
     const bool   hovered = ImGui::IsItemHovered();
+    const bool   active  = ImGui::IsItemActive();
     const ImVec2 mouse   = ImGui::GetIO().MousePos;
+
+    // ---- 拖动平移、滚轮缩放、双击复位 --------------------------------------
+    // 缩放以光标下的那个点为锚（不然放大后视野会乱飘）。
+    // 平移用 MouseDelta 换算成「归一化下标」的位移量。
+    {
+        const float plot_w = std::max( 1.0f, W - 56.0f - 18.0f );   // 与下面的 L/R 一致
+        if( active && ImGui::IsMouseDragging( ImGuiMouseButton_Left ) ) {
+            view.cx -= ImGui::GetIO().MouseDelta.x / plot_w / view.zoom;
+        }
+        if( hovered && ImGui::GetIO().MouseWheel != 0.0f ) {
+            // 光标在视野里的归一化位置（0~1）
+            const float fx = std::clamp( ( mouse.x - origin.x - 56.0f ) / plot_w,
+                                         0.0f, 1.0f );
+            const float half_old = 0.5f / view.zoom;
+            const float ux = ( view.cx - half_old ) + fx * ( 2.0f * half_old );
+            view.zoom = std::clamp( view.zoom * std::pow( 1.15f, ImGui::GetIO().MouseWheel ),
+                                    1.0f, 20.0f );
+            const float half_new = 0.5f / view.zoom;
+            view.cx = ux - fx * ( 2.0f * half_new ) + half_new;
+        }
+        if( hovered && ImGui::IsMouseDoubleClicked( ImGuiMouseButton_Left ) ) {
+            view.zoom = 1.0f;
+            view.cx   = 0.5f;
+        }
+        if( active && ImGui::IsMouseDragging( ImGuiMouseButton_Left ) ) {
+            ImGui::SetMouseCursor( ImGuiMouseCursor_ResizeAll );
+        }
+        // 视野中心不能越界（整段数据就是 [0,1]）
+        const float half = 0.5f / view.zoom;
+        view.cx = std::clamp( view.cx, half, 1.0f - half );
+    }
 
     ImDrawList *dl = ImGui::GetWindowDrawList();
 
@@ -1309,12 +1362,25 @@ void draw_line_chart( const char *id, const std::vector<ChartSeries> &series,
     const double step = nice_step( maxY, opts.y_ticks );
     const double top  = std::max( step, std::ceil( maxY / step ) * step );
 
+    // 可见的横轴范围（归一化下标 0~1）。zoom=1 时就是 [0,1] 全部。
+    const float view_half = 0.5f / view.zoom;
+    const float x0 = view.cx - view_half;
+    const float x1 = view.cx + view_half;
+
     auto px = [&]( int t ) {
-        return a.x + ( b.x - a.x ) * (float)t / (float)std::max( 1, N - 1 );
+        const float u = (float)t / (float)std::max( 1, N - 1 );   // 归一化下标
+        return a.x + ( b.x - a.x ) * ( u - x0 ) / ( x1 - x0 );
     };
     auto py = [&]( double v ) {
         return b.y - ( b.y - a.y ) * (float)( v / top );
     };
+    // 「归一化下标 → 采样点序号」，悬停提示用
+    auto u_to_index = [&]( float u ) {
+        return std::clamp( (int)std::lround( u * ( N - 1 ) ), 0, N - 1 );
+    };
+    // 可见的采样点范围（放大后只画这一截，省得白算）
+    const int vis_lo = u_to_index( x0 );
+    const int vis_hi = u_to_index( x1 );
 
     const ImU32 col_bg   = ImGui::GetColorU32( ImGuiCol_FrameBg );
     const ImU32 col_grid = ImGui::GetColorU32( ImGuiCol_Border, 0.7f );
@@ -1333,15 +1399,19 @@ void draw_line_chart( const char *id, const std::vector<ChartSeries> &series,
         dl->AddText( ImVec2( a.x - 8.0f - ts.x, y - ts.y * 0.5f ), col_text, lab.c_str() );
     }
 
-    // 纵向网格 + X 轴刻度（点多了就隔几个标一个，别挤成一团）
+    // 纵向网格 + X 轴刻度（点多了就隔几个标一个，别挤成一团）。
+    // ★ 步长随缩放走：放大之后看到的点少了，再按原来的间隔标就太稀，
+    //   所以除以 zoom —— 视觉上刻度密度始终差不多。
     const bool custom_x = ( (int)opts.x_labels.size() == N );
-    const int xstep  = std::max( 1, ( N - 1 ) / 10 );      // 网格线
-    const int lstep  = opts.x_tick_step > 0 ? opts.x_tick_step : xstep;   // 刻度文字
-    for( int t = 0; t < N; t += xstep ) {
+    const int base_step  = std::max( 1, ( N - 1 ) / 10 );                  // 网格线
+    const int base_lstep = opts.x_tick_step > 0 ? opts.x_tick_step : base_step;
+    const int xstep = std::max( 1, (int)std::lround( base_step  / view.zoom ) );
+    const int lstep = std::max( 1, (int)std::lround( base_lstep / view.zoom ) );
+    for( int t = vis_lo; t <= vis_hi; t += xstep ) {
         const float x = px( t );
         dl->AddLine( ImVec2( x, a.y ), ImVec2( x, b.y ), col_grid );
     }
-    for( int t = 0; t < N; t += lstep ) {
+    for( int t = vis_lo; t <= vis_hi; t += lstep ) {
         const std::string lab = custom_x ? opts.x_labels[t] : fmt_str( "%d", t );
         const ImVec2 ts = ImGui::CalcTextSize( lab.c_str() );
         dl->AddText( ImVec2( px( t ) - ts.x * 0.5f, b.y + 6.0f ), col_text, lab.c_str() );
@@ -1353,10 +1423,12 @@ void draw_line_chart( const char *id, const std::vector<ChartSeries> &series,
 
     // 折线。多条线时不画填充 —— 半透明色块互相叠加会糊成一片，
     // 反而看不清谁是谁。单条线时垫一层，看着有分量。
+    //
+    // ★ 放大之后曲线会伸到绘图区外面，必须裁剪 —— 不然线会画到坐标轴上、
+    //   甚至糊到旁边的图例里。只裁数据，网格和坐标轴在边上，不能裁。
     const bool fill = ( series.size() == 1 );
-    std::vector<std::vector<ImVec2>> all_pts;
-    all_pts.reserve( series.size() );
 
+    dl->PushClipRect( a, b, true );
     for( const ChartSeries &s : series ) {
         std::vector<ImVec2> pts;
         pts.reserve( N );
@@ -1377,8 +1449,8 @@ void draw_line_chart( const char *id, const std::vector<ChartSeries> &series,
         for( const ImVec2 &p : pts ) {
             dl->AddCircleFilled( p, 3.0f, s.color );
         }
-        all_pts.push_back( std::move( pts ) );
     }
+    dl->PopClipRect();
 
     // 参考横线。标签不画在线上 —— 阈值通常远小于纵轴上限（比如 348 / 127 / 54
     // 对 3000），三条线全挤在最下面一截，各自带标签会叠成一团。改成右上角的
@@ -1440,11 +1512,12 @@ void draw_line_chart( const char *id, const std::vector<ChartSeries> &series,
         }
     }
 
-    // 悬停：竖线 + 该回合的数值
+    // 悬停：竖线 + 该回合的数值。
+    // ★ 缩小/放大之后，屏幕上的一段对应的是视野 [x0,x1] 那一段，不能直接按
+    //   「鼠标在绘图区的比例 × (N−1)」算 —— 那样放大后会指到错误的点。
     if( hovered && mouse.x >= a.x - 6.0f && mouse.x <= b.x + 6.0f ) {
-        int t = (int)std::lround( ( mouse.x - a.x ) / ( b.x - a.x )
-                                  * (float)std::max( 1, N - 1 ) );
-        t = std::max( 0, std::min( N - 1, t ) );
+        const float fx = std::clamp( ( mouse.x - a.x ) / ( b.x - a.x ), 0.0f, 1.0f );
+        const int   t  = u_to_index( x0 + fx * ( x1 - x0 ) );
         const ImVec2 p( px( t ), a.y );
         dl->AddLine( ImVec2( p.x, a.y ), ImVec2( p.x, b.y ),
                      ImGui::GetColorU32( ImGuiCol_Text, 0.3f ) );
@@ -1487,6 +1560,37 @@ void draw_line_chart( const char *id, const std::vector<ChartSeries> &series,
         dl->AddText( ImVec2( ( a.x + b.x ) * 0.5f - ts.x * 0.5f, b.y + 28.0f ),
                      col_text, opts.x_label );
     }
+
+    // ---- 底边的拖拽条：往下拖把图拉高 --------------------------------------
+    // 和左右分栏那条竖线一个套路：透明按钮接鼠标、按 MouseDelta 改值、自己画线。
+    {
+        // ★ ID 必须带上图自己的 id —— 三张图的拖拽条在同一个窗口里，
+        //   全叫 "##hsplit" 会撞 ID（ImGui 会直接弹红框报 Programmer error）。
+        const std::string grip_id = std::string( id ) + "_grip";
+        ImGui::SetCursorScreenPos( ImVec2( origin.x, origin.y + H ) );
+        ImGui::InvisibleButton( grip_id.c_str(), ImVec2( W, 7.0f ) );
+        const bool gact = ImGui::IsItemActive();
+        const bool ghov = ImGui::IsItemHovered();
+        if( gact ) {
+            view.height = H + ImGui::GetIO().MouseDelta.y;
+        }
+        view.height = std::clamp( view.height, 140.0f, 1400.0f );
+        if( gact || ghov ) {
+            ImGui::SetMouseCursor( ImGuiMouseCursor_ResizeNS );
+        }
+        const ImVec2 q0 = ImGui::GetItemRectMin();
+        const ImVec2 q1 = ImGui::GetItemRectMax();
+        const float  gy = ( q0.y + q1.y ) * 0.5f;
+        const float  gx0 = origin.x + ( W - 60.0f ) * 0.5f;      // 中间画一小段，别画满
+        dl->AddLine( ImVec2( gx0, gy ), ImVec2( gx0 + 60.0f, gy ),
+                     ImGui::GetColorU32( gact  ? ImGuiCol_SeparatorActive
+                                       : ghov  ? ImGuiCol_SeparatorHovered
+                                               : ImGuiCol_Separator ),
+                     gact ? 3.0f : 1.0f );
+    }
+
+    // 图的交互方式没有视觉提示，不写一句没人会知道能拖/能缩放
+    ImGui::TextDisabled( "%s", zh::g::CHART_OPS );
 }
 
 // 卡壳警告：选中的弹药「推不动这把枪的循环」时弹一条醒目的。
@@ -1536,7 +1640,7 @@ void draw_burst_table( const DetailCache &d )
 
         ImGui::PushID( sc.qty );
         if( ImGui::BeginTable( "burst", 4,
-                               ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV ) ) {
+                               TABLE_FLAGS )) {
             ImGui::TableSetupColumn( zh::g::COL_SHOT_NO, ImGuiTableColumnFlags_WidthStretch );
             ImGui::TableSetupColumn( zh::g::COL_RECOIL, ImGuiTableColumnFlags_WidthFixed, 100 );
             ImGui::TableSetupColumn( zh::g::COL_50RANGE, ImGuiTableColumnFlags_WidthFixed, 120 );
@@ -1639,7 +1743,7 @@ void draw_instance( const DetailCache &d )
     note( "%s", zh::g::INSTANCE_HINT );
 
     if( ImGui::BeginTable( "instance", 5,
-                           ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV ) ) {
+                           TABLE_FLAGS )) {
         ImGui::TableSetupColumn( zh::g::COL_AIMLEVEL, ImGuiTableColumnFlags_WidthStretch );
         ImGui::TableSetupColumn( zh::g::COL_RECOIL, ImGuiTableColumnFlags_WidthFixed, 100 );
         ImGui::TableSetupColumn( zh::g::COL_FIXDISP, ImGuiTableColumnFlags_WidthFixed, 100 );
