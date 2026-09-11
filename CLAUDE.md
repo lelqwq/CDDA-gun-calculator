@@ -108,6 +108,48 @@ git show 27939e29b8b4ddc081490d9f51de59a459c88df6:src/item.cpp | grep -n -A10 "D
 - MSVC：Visual Studio 18 Community，`14.50.35717`
 - **没装 Ninja**，不要用 `-G Ninja`
 
+### 图形界面版（gunlab_gui）
+
+双击 `scripts\build_gui.bat`，产物 `build-gui\gunlab_gui.exe`。
+
+**只能用 MinGW 编译**：机器上唯一的 SDL3 是 msys64 的 MinGW 版，MSVC 链不了它，
+所以 `build_gui.bat` 里指定了 `-G "MinGW Makefiles"` 和 `-DCMAKE_PREFIX_PATH=C:/msys64/mingw64`。
+CMake 里写的是 `find_package(SDL3 QUIET)`，**找不到就跳过 GUI 目标**，不会连累命令行版。
+
+GUI 特有的两个坑：
+
+1. **`-static` 管不到 SDL3.dll 的依赖链。** SDL3.dll 是 msys64 编译的共享库，
+   自己没静态链接，后面还拖着 `libiconv-2.dll`。CMakeLists 里的 `-static` 只作用于
+   我们自己编译的 exe，所以光拷 SDL3.dll 双击会弹
+   「由于找不到 libiconv-2.dll，无法继续执行代码」。
+   构建脚本第 3 步用 `scripts\copy_gui_deps.ps1` 递归解析 PE 导入表，把整条链拷齐
+   （当前解析出 2 个）。
+
+2. **`.ps1` 必须带 UTF-8 BOM。** Windows PowerShell 5.1 对无 BOM 的脚本按系统
+   代码页（936）解读，中文注释被解坏后会吃掉字符串结束符，报
+   `The string is missing the terminator`。加 BOM：
+   ```powershell
+   $p = "scripts\copy_gui_deps.ps1"
+   $c = Get-Content -Raw -Encoding UTF8 $p
+   [System.IO.File]::WriteAllText($p, $c, (New-Object System.Text.UTF8Encoding($true)))
+   ```
+   （和 MSVC 缺 `/utf-8` 是同一类问题，只是换了个解释器。）
+
+**验证界面真的起来了**（不用人眼看，`MainWindowTitle` 能区分正常窗口和报错对话框）：
+
+```powershell
+$exe = "build-gui\gunlab_gui.exe"
+$p = Start-Process $exe -WorkingDirectory (Split-Path $exe) -PassThru
+Start-Sleep 4; $p.Refresh()
+$p.MainWindowTitle                                     # 'gunlab — Cataclysm 枪械计算器'
+$p.Modules | ? { $_.ModuleName -match 'SDL3|iconv' }   # 两个都要在，说明 DLL 真加载了
+$p | Stop-Process -Force
+```
+
+> 注意：工具的执行环境本身建不了可见窗口，但**上面这段能跑**（进程侧的窗口标题
+> 和模块表都拿得到）。要真看渲染效果，用 `PrintWindow` 抓图 —— 见
+> `%TEMP%\gunlab_cap.ps1` 那份临时脚本，抓出来中文是否显示为方块一目了然。
+
 ---
 
 ## 三、数据生成
@@ -155,8 +197,25 @@ python scripts/gen_gun_data.py --game "<路径>" --mods Aftershock,Xedra_Evolved
 查不到就用英文原名（覆盖率 97.1%，未译的 2.9% 全是 `Glock 36`、
 `S&W 460XVR` 这类本就该保留原文的型号名）。
 
-> **坑**：Python 的 `gettext` 把部分条目存成**元组键** `('bipod', 0)` 而不是
+> **坑 1**：Python 的 `gettext` 把部分条目存成**元组键** `('bipod', 0)` 而不是
 > 字符串，必须同时试 `C.get(s)` 和 `C.get((s, 0))`，否则一条都查不到。
+> 另外 `GNUTranslations` **没有 `.get()`**，要用 `._catalog.get()`。
+
+> **坑 2**：技能的**显示名和 id 不是一回事**。`data/json/skills.json` 里
+> `id "launcher"` 的 `name` 是 `"launchers"`（译「重武器」，不是「发射器」），
+> `id "gun"` 的 name 是 `"marksmanship"`（译「枪法」）。`zh::skill()` 里必须
+> 填**显示名对应的译文**，照 id 直译会和游戏界面对不上。
+>
+> | id | 显示名 | 官方中文 |
+> |---|---|---|
+> | rifle / pistol / shotgun / smg | rifles / handguns / shotguns / submachine guns | 步枪 / 手枪 / 霰弹枪 / 冲锋枪 |
+> | launcher | launchers | **重武器** |
+> | archery | archery | 弓术 |
+> | gun | marksmanship | **枪法** |
+> | throw | throwing | **投掷** |
+>
+> 游戏数据里实际出现的只有这 8 种（步枪 146 / 手枪 105 / 霰弹枪 46 /
+> 冲锋枪 25 / 重武器 24 / 弓术 17 / 投掷 5）。
 
 ---
 
