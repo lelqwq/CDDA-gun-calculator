@@ -95,6 +95,11 @@ char             g_search[128] = "";
 std::vector<int> g_hits;                  // 搜索命中的枪械下标
 int              g_selected = -1;         // 当前选中的枪械下标
 
+// 选中枪械的工作副本。装/卸配件改的是它，g_guns 那份只读数据库保持原样 ——
+// 否则换个枪再换回来，之前装的配件会「粘」在数据库上。
+Gun g_work;
+int g_work_rev = 0;                       // 每改一次配件 +1，用来让详情缓存失效
+
 std::vector<int> g_ammo_choices;          // 当前枪可用的弹药（g_ammo 的下标）
 int              g_ammo_pick = -1;        // 在 g_ammo_choices 里的位置
 
@@ -109,6 +114,7 @@ struct DetailCache {
     bool   valid    = false;
     int    gun_idx  = -1;
     int    ammo_idx = -1;
+    int    work_rev = -1;                     // 配件改动也要让缓存失效
     int    dex = 0, per = 0, str = 0, skill = 0, marks = 0;
 
     AimResult aim;
@@ -130,6 +136,7 @@ struct ProbCache {
     bool valid    = false;
     int  gun_idx  = -1;
     int  ammo_idx = -1;
+    int  work_rev = -1;
     int  dex = 0, per = 0, str = 0, skill = 0, marks = 0;
     double th[PROB_NLEVEL] = { 0, 0, 0, 0 };                 // 各档位的瞄准误差
     double pct[PROB_NLEVEL][PROB_NDIST][PROB_NTIER] = {};    // 百分比
@@ -204,22 +211,100 @@ void sync_character()
     g_ch.marksmanship_level = g_p_marks;
 }
 
-// 缓存键是否还对得上（枪 / 弹药 / 四个人物参数）
+// 缓存键：枪 / 弹药 / 配件改动次数 / 四个人物参数，任何一项变了都得重算
 template<typename T>
-bool key_matches( const T &c, int gun_idx, int ammo_idx )
+bool key_matches( const T &c )
 {
-    return c.valid && c.gun_idx == gun_idx && c.ammo_idx == ammo_idx
+    return c.valid && c.gun_idx == g_selected && c.ammo_idx == g_ammo_pick
+        && c.work_rev == g_work_rev
         && c.dex == g_p_dex && c.per == g_p_per && c.str == g_p_str
         && c.skill == g_p_skill && c.marks == g_p_marks;
 }
 
 template<typename T>
-void store_key( T &c, int gun_idx, int ammo_idx )
+void store_key( T &c )
 {
-    c.gun_idx  = gun_idx;
-    c.ammo_idx = ammo_idx;
+    c.gun_idx  = g_selected;
+    c.ammo_idx = g_ammo_pick;
+    c.work_rev = g_work_rev;
     c.dex = g_p_dex;  c.per = g_p_per;  c.str = g_p_str;
     c.skill = g_p_skill;  c.marks = g_p_marks;
+}
+
+// 重算这把枪可选哪些弹药。keep_current 为 true 时尽量留住当前选中的那款 ——
+// 装个配件不该顺手把你挑好的弹药换掉；实在没了（比如换了机匣改口径）才回落。
+void refresh_ammo_choices( bool keep_current )
+{
+    std::string prev_id;
+    if( keep_current ) {
+        if( const Ammo *prev = current_ammo() ) {
+            prev_id = prev->id;
+        }
+    }
+
+    g_ammo_choices = ammo_for_gun( g_work );
+    g_ammo_pick = -1;
+
+    if( !prev_id.empty() ) {
+        for( int i = 0; i < (int)g_ammo_choices.size(); i++ ) {
+            if( g_ammo[g_ammo_choices[i]].id == prev_id ) { g_ammo_pick = i; break; }
+        }
+    }
+
+    // 默认选「标准弹」（普通 FMJ），选不到就取第一种
+    if( g_ammo_pick < 0 ) {
+        if( const Ammo *def = pick_default_ammo( g_work ) ) {
+            // pick_default_ammo 返回的是 g_ammo 里元素的地址，换成下标
+            const int di = (int)( def - g_ammo.data() );
+            if( di >= 0 && di < (int)g_ammo.size() ) {
+                for( int i = 0; i < (int)g_ammo_choices.size(); i++ ) {
+                    if( g_ammo_choices[i] == di ) { g_ammo_pick = i; break; }
+                }
+            }
+        }
+    }
+    if( g_ammo_pick < 0 && !g_ammo_choices.empty() ) {
+        g_ammo_pick = 0;
+    }
+}
+
+// 配件有变动：两个缓存作废，并重算可选弹药（机匣会改口径）
+void mods_changed()
+{
+    g_work_rev++;
+    g_detail.valid = false;
+    g_probs.valid  = false;
+    refresh_ammo_choices( true );
+}
+
+// 装上配件。一个槽位只能装一件，同槽位的旧配件自动替换 —— 与命令行版一致
+void install_mod( int mod_idx )
+{
+    if( mod_idx < 0 || mod_idx >= (int)g_mods.size() ) {
+        return;
+    }
+    // 弹窗里已经按 mod_fits_gun 过滤过了，这里再挡一道 —— 装配是改状态的操作，
+    // 不该依赖调用方有没有先过滤
+    if( !mod_fits_gun( g_work, g_mods[mod_idx] ) ) {
+        return;
+    }
+    const GunMod nm = g_mods[mod_idx];
+    g_work.mods.erase( std::remove_if( g_work.mods.begin(), g_work.mods.end(),
+                                       [&]( const GunMod &x ) {
+                                           return x.location == nm.location;
+                                       } ),
+                       g_work.mods.end() );
+    g_work.mods.push_back( nm );
+    mods_changed();
+}
+
+void remove_mod_at( int which )
+{
+    if( which < 0 || which >= (int)g_work.mods.size() ) {
+        return;
+    }
+    g_work.mods.erase( g_work.mods.begin() + which );
+    mods_changed();
 }
 
 void select_gun( int idx )
@@ -227,32 +312,19 @@ void select_gun( int idx )
     g_selected = idx;
     g_detail.valid = false;
     g_probs.valid  = false;
+    g_work_rev = 0;
+    g_ammo_choices.clear();
+    g_ammo_pick = -1;
     if( idx < 0 ) {
-        g_ammo_choices.clear();
-        g_ammo_pick = -1;
         return;
     }
 
-    const Gun &g = g_guns[idx];
+    g_work = g_guns[idx];         // 工作副本，改配件只动它
     sync_character();
     // 和命令行版一致：武器技能固定取这把枪对应的技能
-    g_ch.gun_skill = g.skill;
+    g_ch.gun_skill = g_work.skill;
 
-    g_ammo_choices = ammo_for_gun( g );
-    g_ammo_pick = -1;
-    // 默认选「标准弹」（普通 FMJ），选不到就取第一种
-    if( const Ammo *def = pick_default_ammo( g ) ) {
-        // pick_default_ammo 返回的是 g_ammo 里的元素的地址，换成下标
-        const int di = (int)( def - g_ammo.data() );
-        if( di >= 0 && di < (int)g_ammo.size() ) {
-            for( int i = 0; i < (int)g_ammo_choices.size(); i++ ) {
-                if( g_ammo_choices[i] == di ) { g_ammo_pick = i; break; }
-            }
-        }
-    }
-    if( g_ammo_pick < 0 && !g_ammo_choices.empty() ) {
-        g_ammo_pick = 0;
-    }
+    refresh_ammo_choices( false );
 }
 
 void refresh_hits()
@@ -282,7 +354,7 @@ void compute_detail( const Gun &g, const Ammo *ammo )
             range_with_even_chance_of_good_hit( g_detail.fixed_disp + th[i] );
     }
 
-    store_key( g_detail, g_selected, g_ammo_pick );
+    store_key( g_detail );
     g_detail.valid = true;
 }
 
@@ -313,7 +385,7 @@ void compute_probs( const Gun &g, const Ammo *ammo, const AimResult &ar )
         }
     }
 
-    store_key( g_probs, g_selected, g_ammo_pick );
+    store_key( g_probs );
     g_probs.valid = true;
 }
 
@@ -361,11 +433,15 @@ void draw_toolbar()
     ImGui::InputInt( "##str", &g_p_str, 1, 1 );
 
     // 武器技能的标签随枪种变（选中步枪时显示「步枪等级」）
-    const char *gun_skill_name = ( g_selected >= 0 )
-                                 ? zh::skill( g_guns[g_selected].skill ).c_str()
-                                 : zh::g::P_SKILL;
+    //
+    // ★ 这里必须存 std::string 而不是 c_str()。zh::skill() 返回的是临时
+    //   std::string，用 `const char *p = cond ? zh::skill(x).c_str() : "…"`
+    //   的话，临时对象在整条语句结束时就析构了，p 立刻变成悬垂指针。
+    const std::string gun_skill_name = ( g_selected >= 0 )
+                                       ? zh::skill( g_work.skill )
+                                       : std::string( zh::g::P_SKILL );
     ImGui::SameLine( 0, GAP );
-    ImGui::Text( zh::g::P_SKILL_FMT, gun_skill_name );
+    ImGui::Text( zh::g::P_SKILL_FMT, gun_skill_name.c_str() );
     ImGui::SameLine();
     ImGui::SetNextItemWidth( 90 );
     ImGui::InputInt( "##skill", &g_p_skill, 1, 1 );
@@ -378,7 +454,7 @@ void draw_toolbar()
 
     sync_character();
     if( g_selected >= 0 ) {
-        g_ch.gun_skill = g_guns[g_selected].skill;
+        g_ch.gun_skill = g_work.skill;
     }
 }
 
@@ -461,28 +537,33 @@ void draw_detail_header( const Gun &g )
     }
 }
 
-// 已装配件（第 4 步会在这里加装配界面）
+// 配件：已装的可以移除，未装的可从兼容列表里装
 void draw_mods( const Gun &g )
 {
     if( !ImGui::CollapsingHeader( zh::g::SEC_MODS, ImGuiTreeNodeFlags_DefaultOpen ) ) {
         return;
     }
+
+    // ---- 已安装 -------------------------------------------------------------
+    // 先把要执行的操作记下来，等表格画完再动手 —— 在遍历 g.mods 的过程中
+    // 改 g.mods 会让迭代器失效
+    int remove_which = -1;
+
     if( g.mods.empty() ) {
         ImGui::TextDisabled( "%s", zh::g::NO_MODS );
-        return;
-    }
-
-    if( ImGui::BeginTable( "mods", 6,
-                           ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV ) ) {
+    } else if( ImGui::BeginTable( "mods", 7,
+                                  ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV ) ) {
         ImGui::TableSetupColumn( zh::g::COL_MOD_NAME, ImGuiTableColumnFlags_WidthStretch );
         ImGui::TableSetupColumn( zh::g::COL_MOD_SLOT, ImGuiTableColumnFlags_WidthFixed, 100 );
         ImGui::TableSetupColumn( zh::g::COL_HANDLING, ImGuiTableColumnFlags_WidthFixed, 64 );
         ImGui::TableSetupColumn( zh::g::COL_AIM, ImGuiTableColumnFlags_WidthFixed, 64 );
         ImGui::TableSetupColumn( zh::g::COL_SIGHT, ImGuiTableColumnFlags_WidthFixed, 84 );
         ImGui::TableSetupColumn( zh::g::COL_FOV, ImGuiTableColumnFlags_WidthFixed, 64 );
+        ImGui::TableSetupColumn( "##del", ImGuiTableColumnFlags_WidthFixed, 60 );
         ImGui::TableHeadersRow();
 
-        for( const GunMod &m : g.mods ) {
+        for( int i = 0; i < (int)g.mods.size(); i++ ) {
+            const GunMod &m = g.mods[i];
             ImGui::TableNextRow();
             ImGui::TableNextColumn(); ImGui::TextUnformatted( m.name.c_str() );
             ImGui::TableNextColumn(); ImGui::TextUnformatted( zh::slot( m.location ).c_str() );
@@ -494,8 +575,70 @@ void draw_mods( const Gun &g )
             ImGui::TableNextColumn();
             if( m.field_of_view >= 0 ) ImGui::Text( "%.0f", m.field_of_view );
             else                       ImGui::TextDisabled( "—" );
+            ImGui::TableNextColumn();
+            ImGui::PushID( i );
+            if( ImGui::SmallButton( zh::g::REMOVE_MOD ) ) {
+                remove_which = i;
+            }
+            ImGui::PopID();
         }
         ImGui::EndTable();
+    }
+
+    // ---- 安装 ---------------------------------------------------------------
+    ImGui::Spacing();
+    if( ImGui::Button( zh::g::ADD_MOD ) ) {
+        ImGui::OpenPopup( "mod_picker" );
+    }
+
+    if( ImGui::BeginPopup( "mod_picker" ) ) {
+        ImGui::TextUnformatted( zh::g::MOD_PICKER );
+        ImGui::Separator();
+        note( "%s", zh::g::MOD_REPLACE );
+        ImGui::Spacing();
+
+        // 按槽位分组列兼容配件。同槽位的挨在一起，一眼看出哪几个在抢同一个位置
+        const std::vector<std::string> slots = available_slots( g );
+        bool any = false;
+        ImGui::BeginChild( "mod_scroll", ImVec2( 520, 420 ) );
+        for( const std::string &slot : slots ) {
+            bool head = false;
+            for( int i = 0; i < (int)g_mods.size(); i++ ) {
+                const GunMod &m = g_mods[i];
+                if( m.location != slot || !mod_fits_gun( g, m ) ) {
+                    continue;
+                }
+                if( !head ) {
+                    ImGui::SeparatorText( zh::slot( slot ).c_str() );
+                    head = true;
+                    any = true;
+                }
+                ImGui::PushID( i );
+                if( ImGui::Selectable( m.name.c_str() ) ) {
+                    install_mod( i );
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::PopID();
+                ImGui::SameLine( 330 );
+                // 上机匣会带来口径，列出来才知道装上去能打什么弹
+                const std::string ammo_note =
+                    m.ammo_modifier.empty() ? "" : ( "  " + m.ammo_modifier[0] );
+                ImGui::TextDisabled( "操控%+.0f  瞄准%+.0f%s", m.handling_modifier,
+                                     m.aim_speed_modifier, ammo_note.c_str() );
+            }
+        }
+        if( !any ) {
+            ImGui::PushTextWrapPos( 0.0f );
+            ImGui::TextDisabled( "%s", zh::g::NO_COMPAT );
+            ImGui::PopTextWrapPos();
+        }
+        ImGui::EndChild();
+        ImGui::EndPopup();
+    }
+
+    // 表格画完了，现在安全地改数据
+    if( remove_which >= 0 ) {
+        remove_mod_at( remove_which );
     }
 }
 
@@ -658,7 +801,7 @@ void draw_probabilities( const Gun &g, const Ammo *ammo )
     note( "%s", zh::g::PROB_HINT );
     note( "%s", zh::g::PROB_RULE );
 
-    if( !key_matches( g_probs, g_selected, g_ammo_pick ) ) {
+    if( !key_matches( g_probs ) ) {
         compute_probs( g, ammo, g_detail.aim );
     }
 
@@ -704,16 +847,19 @@ void draw_detail()
         return;
     }
 
-    const Gun  &g    = g_guns[g_selected];
+    const Gun  &g    = g_work;        // 工作副本：含用户装的配件
     const Ammo *ammo = current_ammo();
 
     draw_detail_header( g );
     if( ammo == nullptr ) {
+        // 模块化枪械没装机匣时没有口径，但配件还是要能装 —— 装备区不能藏
+        ImGui::Spacing();
+        draw_mods( g );
         ImGui::EndChild();
         return;
     }
 
-    if( !key_matches( g_detail, g_selected, g_ammo_pick ) ) {
+    if( !key_matches( g_detail ) ) {
         compute_detail( g, ammo );
     }
 
@@ -770,6 +916,7 @@ int main( int argc, char **argv )
     if( !g_hits.empty() ) {
         select_gun( g_hits[0] );
     }
+
 
     if( !SDL_Init( SDL_INIT_VIDEO ) ) {
         std::printf( "SDL_Init 失败：%s\n", SDL_GetError() );

@@ -355,6 +355,16 @@ inline const char *SEC_INSTANCE = "瞄准档位实例";
 inline const char *SEC_PROB     = "命中档位概率";
 inline const char *NO_MODS      = "（未安装任何配件）";
 
+// 配件安装 / 移除
+inline const char *ADD_MOD      = "安装配件…";
+inline const char *REMOVE_MOD   = "移除";
+inline const char *MOD_PICKER   = "选择要安装的配件";
+inline const char *NO_COMPAT    =
+    "这把枪当前没有可用配件 —— 模块化枪械（如 M16）要先装上机匣，"
+    "导轨 / 瞄具 / 管下这些槽位是机匣提供的";
+inline const char *MOD_REPLACE  = "一个槽位只能装一件，安装会替换掉该槽位原有的配件";
+inline const char *COL_AMMO_MOD = "口径";
+
 // 配件表列头
 inline const char *COL_MOD_NAME = "配件";
 inline const char *COL_MOD_SLOT = "槽位";
