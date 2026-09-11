@@ -116,6 +116,16 @@ git show 27939e29b8b4ddc081490d9f51de59a459c88df6:src/item.cpp | grep -n -A10 "D
 所以 `build_gui.bat` 里指定了 `-G "MinGW Makefiles"` 和 `-DCMAKE_PREFIX_PATH=C:/msys64/mingw64`。
 CMake 里写的是 `find_package(SDL3 QUIET)`，**找不到就跳过 GUI 目标**，不会连累命令行版。
 
+**GUI 必须是 GUI 子系统**（CMakeLists 里 `WIN32_EXECUTABLE TRUE`，MinGW 下等价
+`-mwindows`）。不设的话默认是控制台子系统，双击时会先弹一个黑框 ——
+就是启动诊断那两行，而且因为控制台按 GBK 读 UTF-8，显示成一片乱码。
+
+代价是**没有 stdout 了**：启动诊断只在重定向到文件时才收得到。
+所以启动失败的提示必须走 `SDL_ShowSimpleMessageBox`（见 `main_gui.cpp`
+的 `fatal()`），printf 给双击启动的用户看是白搭 —— 现象会变成
+「双击了，什么都没发生」。命令行版（`gunlab.exe`）**保持控制台子系统不动**，
+那是它存在的意义。
+
 GUI 特有的两个坑：
 
 1. **`-static` 管不到 SDL3.dll 的依赖链。** SDL3.dll 是 msys64 编译的共享库，
