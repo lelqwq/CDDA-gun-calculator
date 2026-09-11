@@ -230,12 +230,20 @@ struct ChartMark {
 
 // 定义在下面「瞄准档位实例」附近。这里前置声明是因为瞄准时间线的图要用它，
 // 而那个函数定义在更前面。
-void draw_line_chart( const char *id,
-                      const std::vector<double> &data,
-                      const char *y_label,
-                      const char *y_fmt,
-                      const char *tip_fmt,
-                      const std::vector<ChartMark> &marks = {} );
+// 折线图的参数。
+// 收成结构体是因为字段一多，位置传参就很容易串 —— 尤其 y_ticks(int) 和
+// height(float) 挨着，传反了会隐式转换、编译都不报错。
+struct ChartOpts {
+    const char *y_label;                             // 纵轴名，画在左上角
+    const char *tip_fmt;                             // 悬停提示格式：(回合, 值)
+    const char *y_fmt  = "%.0f";                     // 纵轴刻度格式
+    const std::vector<ChartMark> *marks = nullptr;   // 参考横线，可空
+    int         y_ticks = 5;                         // 想要几格，实际步长取整成 1/2/5×10ⁿ
+    float       height  = 280.0f;                    // 绘图区总高（像素）
+};
+
+void draw_line_chart( const char *id, const std::vector<double> &data,
+                      const ChartOpts &opts );
 
 // 灰色小字说明，自动换行
 void note( const char *fmt, ... )
@@ -1023,8 +1031,14 @@ void draw_aim_timeline( const DetailCache &d )
         { d.aim.careful_th, zh::AIM_LEVEL_2 },
         { d.aim.precise_th, zh::AIM_LEVEL_3 },
     };
-    draw_line_chart( "##recoil_curve", d.recoil_curve, zh::g::AXIS_RECOIL,
-                     "%.0f", zh::g::RECOIL_TIP, marks );
+    // 刻度 7 格（0~3000 的步长取整成 500，网格细一倍），图也给高一些。
+    //
+    // ★ 三个档位阈值是 348 / 127 / 54，在 0~3000 的纵轴上只占底部 12%，
+    //   必须靠绝对高度把它们拉开 —— 绘图区高度 = height - 88（上下边距）。
+    //   300px 高时三条线离底边只有 22 / 8 / 3.5 像素，几乎重叠；
+    //   560px 高（绘图区 472px）则拉开到 55 / 20 / 8.5 像素，能分得清。
+    draw_line_chart( "##recoil_curve", d.recoil_curve,
+                     { zh::g::AXIS_RECOIL, zh::g::RECOIL_TIP, "%.0f", &marks, 7, 560.0f } );
 }
 
 // 通用折线图：X 轴固定是「瞄准回合」，Y 轴由调用方给名字和格式。
@@ -1034,20 +1048,22 @@ void draw_aim_timeline( const DetailCache &d )
 //
 // 坐标轴、网格、折线、填充、刻度取整、参考线、悬停提示都在这一个函数里，
 // 两个图（瞄准收益曲线、瞄准时间线的误差曲线）共用。
-void draw_line_chart( const char *id,
-                      const std::vector<double> &data,
-                      const char *y_label,
-                      const char *y_fmt,
-                      const char *tip_fmt,
-                      const std::vector<ChartMark> &marks )   // 默认实参见前置声明
+void draw_line_chart( const char *id, const std::vector<double> &data,
+                      const ChartOpts &opts )
 {
     const int N = (int)data.size();
     if( N < 2 ) {
         return;
     }
 
+    const char *y_label = opts.y_label;
+    const char *y_fmt   = opts.y_fmt;
+    const char *tip_fmt = opts.tip_fmt;
+    const std::vector<ChartMark> &marks =
+        opts.marks ? *opts.marks : std::vector<ChartMark>{};
+
     const float  W      = std::max( 360.0f, ImGui::GetContentRegionAvail().x - 8.0f );
-    const float  H      = 280.0f;
+    const float  H      = opts.height;
     const ImVec2 origin = ImGui::GetCursorScreenPos();
 
     ImGui::InvisibleButton( id, ImVec2( W, H ) );
@@ -1070,7 +1086,7 @@ void draw_line_chart( const char *id,
     for( const ChartMark &m : marks ) {
         maxY = std::max( maxY, m.y );
     }
-    const double step = nice_step( maxY, 5 );
+    const double step = nice_step( maxY, opts.y_ticks );
     const double top  = std::max( step, std::ceil( maxY / step ) * step );
 
     auto px = [&]( int t ) {
@@ -1201,7 +1217,9 @@ void draw_range_curve( const DetailCache &d )
         return;
     }
     note( "%s", zh::g::CURVE_HINT );
-    draw_line_chart( "##range_curve", d.curve, zh::g::AXIS_RANGE, "%.0f", zh::g::CURVE_TIP );
+    // 纵轴只有 0~4 格，不需要太高
+    draw_line_chart( "##range_curve", d.curve,
+                     { zh::g::AXIS_RANGE, zh::g::CURVE_TIP, "%.0f", nullptr, 5, 300.0f } );
 }
 
 // 瞄准档位实例
