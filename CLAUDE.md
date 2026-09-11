@@ -171,6 +171,39 @@ powershell -File scripts\screenshot_gui.ps1 -AppArg "AKM" -Out shot.png
 > `PrintWindow` 只截到左上角 —— **看起来像界面右边被切了，其实界面好得很**。
 > 脚本里已经处理了，换别的截图方式时要记得。
 
+### 点击 / 滚动这类交互，这里验不了
+
+**这个环境送不进鼠标事件**，别浪费时间试。验过的现象：
+
+- `SetCursorPos` 能移动光标，`WindowFromPoint` 也认得出窗口
+- 但 `SetForegroundWindow` 失败，前台窗口永远不是目标窗口
+- 合成点击（`mouse_event` 的 LEFTDOWN/LEFTUP）目标窗口收不到
+- 滚轮同理
+
+（大概是非交互窗口站，输入投递被挡了。）
+
+**要验交互触发的逻辑，改去驱动 ImGui 自己的状态**，而不是模拟鼠标。
+比如验表格排序，用 `ImGuiTableColumnFlags_DefaultSort` 让某列成为默认
+排序列 —— 走的是和点击表头**完全相同**的代码路径，只有 ImGui 内部的
+点击判定没走到（那是库自己的代码）。
+
+临时加一段读环境变量的代码，就能不重编译地跑多个组合：
+
+```cpp
+// main() 里，select_gun 之后
+if( const char *sv = std::getenv( "GUNLAB_SORT" ) ) {
+    int col = -1, desc = 0;
+    std::sscanf( sv, "%d:%d", &col, &desc );
+    g_force_sort_col = col; g_force_sort_desc = (desc != 0);
+}
+```
+
+**验完记得删干净**，然后确认 `grep 临时|GUNLAB_SORT` 只剩注释里提到的那几处。
+
+> 反例，别这么干：直接写 `g_sort_col = 2` 去绕过 ImGui 是没用的 ——
+> 代码里有「ImGui 没在排序而我方有排序状态 → 当作取消排序」的分支，
+> 第一帧就会把它清掉。**必须驱动 ImGui 的状态，不能只改自己那份。**
+
 ### 图表是手绘的，没引 ImPlot
 
 瞄准收益曲线用 ImGui 自带的 `ImDrawList` 画（`draw_range_curve()`）——
