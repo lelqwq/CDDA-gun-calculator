@@ -2,17 +2,31 @@
 //  main_gui.cpp  —  图形界面版（SDL3 + ImGui）
 // -----------------------------------------------------------------------------
 //  与命令行版（src/gunlab.cpp）共用 gunlab_core，所以两边算出来的数字一致。
-//  界面只负责"把数字摆出来"，不做任何计算。
+//  界面只负责「把数字摆出来」，不做任何计算 —— 改公式请去 gunlab_math.cpp。
 //
-//  渲染用的是 SDL3 自带的 SDL_Renderer（不是 OpenGL）—— 省掉 GL 函数加载，
+//  渲染用 SDL3 自带的 SDL_Renderer（不是 OpenGL），省掉 GL 函数加载，
 //  依赖更少，对这种数据工具完全够用。
 //
 //  ★ 中文字体必须手动加载，否则全是方块（ImGui 内置字体不含 CJK）。
+//
+//  ★ 概率表每档采样 20 万次，四个档位合计 80 万次，实测约 99 ms（Release）。
+//    单独跑一次不算什么，但绝不能每帧都跑，所以做了两层处理：
+//      1. 结果缓存，只在「枪 / 弹药 / 人物参数」变化时重算；
+//      2. 只在「命中档位概率」那一栏展开时才算 —— 没展开就一分钱不花。
+//    人物参数也因此用 InputInt 的 +/- 按钮而不是拖动条：拖动条每帧都在变，
+//    会每帧触发重算，界面直接卡死。
+//
+//  命令行：gunlab_gui.exe [关键词]
+//    给了关键词就直接选中第一条匹配的枪（匹配规则与搜索框相同），
+//    方便从快捷方式直接跳到常用枪，也方便自动化验证截图。
 // =============================================================================
 
 #include <algorithm>
+#include <array>
+#include <cstdarg>
 #include <cstdio>
 #include <filesystem>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -70,36 +84,306 @@ static void load_cjk_font( ImGuiIO &io, float size )
 
 namespace {
 
-char        g_search[128] = "";      // 搜索关键词
-std::vector<int> g_hits;             // 匹配到的枪械下标
-int         g_selected = -1;         // 当前选中的枪械下标
+// 标签列的固定宽度：所有 "标签 —— 数值" 的行都对齐到这里
+constexpr float LABEL_W = 220.0f;
+// 同级的空格间距
+constexpr float GAP     = 18.0f;
 
-// 按关键词重新筛选（空关键词 = 全部）
+// ---- 全局状态 ---------------------------------------------------------------
+
+char             g_search[128] = "";
+std::vector<int> g_hits;                  // 搜索命中的枪械下标
+int              g_selected = -1;         // 当前选中的枪械下标
+
+std::vector<int> g_ammo_choices;          // 当前枪可用的弹药（g_ammo 的下标）
+int              g_ammo_pick = -1;        // 在 g_ammo_choices 里的位置
+
+Character g_ch;                           // 人物（详情里所有数字都随它变）
+int g_p_dex = 8, g_p_per = 8, g_p_str = 8;   // 界面上可编辑的那几个
+int g_p_skill = 0, g_p_marks = 0;
+
+// ---- 详情缓存 ---------------------------------------------------------------
+//  两段缓存分开：基础数据很便宜，每次选中就重算；概率表很贵，只在展开时才算。
+
+struct DetailCache {
+    bool   valid    = false;
+    int    gun_idx  = -1;
+    int    ammo_idx = -1;
+    int    dex = 0, per = 0, str = 0, skill = 0, marks = 0;
+
+    AimResult aim;
+    double    fixed_disp = 0.0;
+    int       aim_range[3] = { 0, 0, 0 };     // 三个档位各自的 50%好击距离
+    double    accuracy_limit = 0.0;
+    double    added_recoil   = 0.0;
+};
+
+constexpr int    PROB_N      = 200000;
+constexpr double PROB_TARGET = 1.0;
+constexpr unsigned PROB_SEED = 20260910u;   // 固定种子，和命令行版一致
+constexpr int    PROB_NDIST  = 7;
+constexpr int    PROB_NTIER  = 6;
+constexpr int    PROB_NLEVEL = 4;
+const double     PROB_DISTS[PROB_NDIST] = { 1, 2, 5, 10, 20, 30, 40 };
+
+struct ProbCache {
+    bool valid    = false;
+    int  gun_idx  = -1;
+    int  ammo_idx = -1;
+    int  dex = 0, per = 0, str = 0, skill = 0, marks = 0;
+    double th[PROB_NLEVEL] = { 0, 0, 0, 0 };                 // 各档位的瞄准误差
+    double pct[PROB_NLEVEL][PROB_NDIST][PROB_NTIER] = {};    // 百分比
+};
+
+DetailCache g_detail;
+ProbCache   g_probs;
+
+// ---- 小工具 -----------------------------------------------------------------
+
+// 界面上的文案大多带 %d / %.1f 之类的占位符，先格式化再交给 ImGui。
+// 不用 std::format 是因为 GCC 16 的 libstdc++ 才有，MSVC 侧版本不一致。
+std::string fmt_str( const char *fmt, ... )
+{
+    char buf[512];
+    va_list ap;
+    va_start( ap, fmt );
+    std::vsnprintf( buf, sizeof( buf ), fmt, ap );
+    va_end( ap );
+    return std::string( buf );
+}
+
+// 「标签 ←(对齐到 LABEL_W)→ 数值」
+void kv( const char *label, const char *fmt, ... )
+{
+    ImGui::TextUnformatted( label );
+    ImGui::SameLine( LABEL_W );
+
+    char buf[512];
+    va_list ap;
+    va_start( ap, fmt );
+    std::vsnprintf( buf, sizeof( buf ), fmt, ap );
+    va_end( ap );
+    ImGui::TextUnformatted( buf );
+}
+
+// 灰色小字说明，自动换行
+void note( const char *fmt, ... )
+{
+    char buf[1024];
+    va_list ap;
+    va_start( ap, fmt );
+    std::vsnprintf( buf, sizeof( buf ), fmt, ap );
+    va_end( ap );
+
+    ImGui::PushStyleColor( ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled] );
+    ImGui::Indent();
+    ImGui::PushTextWrapPos( 0.0f );
+    ImGui::TextUnformatted( buf );
+    ImGui::PopTextWrapPos();
+    ImGui::Unindent();
+    ImGui::PopStyleColor();
+}
+
+// ---- 选择与缓存 -------------------------------------------------------------
+
+const Ammo *current_ammo()
+{
+    if( g_ammo_pick < 0 || g_ammo_pick >= (int)g_ammo_choices.size() ) {
+        return nullptr;
+    }
+    return &g_ammo[g_ammo_choices[g_ammo_pick]];
+}
+
+// 把界面上的整数参数同步进 Character
+void sync_character()
+{
+    g_ch.dex  = g_p_dex;
+    g_ch.per  = g_p_per;
+    g_ch.str  = g_p_str;
+    g_ch.skill_level        = g_p_skill;
+    g_ch.marksmanship_level = g_p_marks;
+}
+
+// 缓存键是否还对得上（枪 / 弹药 / 四个人物参数）
+template<typename T>
+bool key_matches( const T &c, int gun_idx, int ammo_idx )
+{
+    return c.valid && c.gun_idx == gun_idx && c.ammo_idx == ammo_idx
+        && c.dex == g_p_dex && c.per == g_p_per && c.str == g_p_str
+        && c.skill == g_p_skill && c.marks == g_p_marks;
+}
+
+template<typename T>
+void store_key( T &c, int gun_idx, int ammo_idx )
+{
+    c.gun_idx  = gun_idx;
+    c.ammo_idx = ammo_idx;
+    c.dex = g_p_dex;  c.per = g_p_per;  c.str = g_p_str;
+    c.skill = g_p_skill;  c.marks = g_p_marks;
+}
+
+void select_gun( int idx )
+{
+    g_selected = idx;
+    g_detail.valid = false;
+    g_probs.valid  = false;
+    if( idx < 0 ) {
+        g_ammo_choices.clear();
+        g_ammo_pick = -1;
+        return;
+    }
+
+    const Gun &g = g_guns[idx];
+    sync_character();
+    // 和命令行版一致：武器技能固定取这把枪对应的技能
+    g_ch.gun_skill = g.skill;
+
+    g_ammo_choices = ammo_for_gun( g );
+    g_ammo_pick = -1;
+    // 默认选「标准弹」（普通 FMJ），选不到就取第一种
+    if( const Ammo *def = pick_default_ammo( g ) ) {
+        // pick_default_ammo 返回的是 g_ammo 里的元素的地址，换成下标
+        const int di = (int)( def - g_ammo.data() );
+        if( di >= 0 && di < (int)g_ammo.size() ) {
+            for( int i = 0; i < (int)g_ammo_choices.size(); i++ ) {
+                if( g_ammo_choices[i] == di ) { g_ammo_pick = i; break; }
+            }
+        }
+    }
+    if( g_ammo_pick < 0 && !g_ammo_choices.empty() ) {
+        g_ammo_pick = 0;
+    }
+}
+
 void refresh_hits()
 {
     g_hits = search_guns( g_search );
 }
 
-// 顶部：搜索框 + 计数
+// ---- 缓存计算 ---------------------------------------------------------------
+
+void compute_detail( const Gun &g, const Ammo *ammo )
+{
+    g_detail.valid = false;
+
+    AimContext ctx;
+    ctx.len_factor = 1.0;                 // 与命令行版一致：空旷地形
+    g_detail.aim        = simulate_aim( g, g_ch, ctx );
+    g_detail.fixed_disp = get_weapon_dispersion( g, g_ch, ammo );
+    g_detail.accuracy_limit = most_accurate_aiming_method_limit( g, g_ch );
+    g_detail.added_recoil   = added_recoil_per_shot(
+        gun_recoil( g, g_ch.str, ammo ? ammo->recoil : 0.0 ),
+        recoil_absorb( g_ch.skill_level ) );
+
+    const double th[3] = { g_detail.aim.regular_th, g_detail.aim.careful_th,
+                           g_detail.aim.precise_th };
+    for( int i = 0; i < 3; i++ ) {
+        g_detail.aim_range[i] =
+            range_with_even_chance_of_good_hit( g_detail.fixed_disp + th[i] );
+    }
+
+    store_key( g_detail, g_selected, g_ammo_pick );
+    g_detail.valid = true;
+}
+
+void compute_probs( const Gun &g, const Ammo *ammo, const AimResult &ar )
+{
+    g_probs.valid = false;
+
+    g_probs.th[0] = MAX_RECOIL;
+    g_probs.th[1] = ar.regular_th;
+    g_probs.th[2] = ar.careful_th;
+    g_probs.th[3] = ar.precise_th;
+
+    std::mt19937 rng( PROB_SEED );
+    std::vector<double> samples( PROB_N );
+
+    for( int L = 0; L < PROB_NLEVEL; L++ ) {
+        for( int i = 0; i < PROB_N; i++ ) {
+            samples[i] = roll_dispersion( g, g_ch, ammo, g_probs.th[L], rng );
+        }
+        for( int d = 0; d < PROB_NDIST; d++ ) {
+            long cnt[PROB_NTIER] = { 0, 0, 0, 0, 0, 0 };
+            for( int i = 0; i < PROB_N; i++ ) {
+                cnt[tier_index( missed_by( samples[i], PROB_DISTS[d], PROB_TARGET ) )]++;
+            }
+            for( int t = 0; t < PROB_NTIER; t++ ) {
+                g_probs.pct[L][d][t] = 100.0 * (double)cnt[t] / PROB_N;
+            }
+        }
+    }
+
+    store_key( g_probs, g_selected, g_ammo_pick );
+    g_probs.valid = true;
+}
+
+// ---- 顶部：搜索 + 人物参数 ---------------------------------------------------
+
 void draw_toolbar()
 {
     ImGui::SetNextItemWidth( 320 );
-    if( ImGui::InputTextWithHint( "##search", "搜索：中文名 / 英文名 / id / 别名",
+    if( ImGui::InputTextWithHint( "##search", zh::g::SEARCH_HINT,
                                   g_search, sizeof( g_search ) ) ) {
         refresh_hits();
-        g_selected = -1;
+        select_gun( -1 );
     }
     ImGui::SameLine();
-    if( ImGui::Button( "清空" ) ) {
+    if( ImGui::Button( zh::g::CLEAR ) ) {
         g_search[0] = '\0';
         refresh_hits();
-        g_selected = -1;
+        select_gun( -1 );
     }
     ImGui::SameLine();
-    ImGui::TextDisabled( "%d / %d 把", (int)g_hits.size(), (int)g_guns.size() );
+    ImGui::TextDisabled( zh::g::COUNT_FMT, (int)g_hits.size(), (int)g_guns.size() );
+
+    ImGui::Spacing();
+    ImGui::TextDisabled( "%s", zh::g::CHAR_HINT );
+    ImGui::SameLine();
+    ImGui::TextDisabled( "|" );
+
+    // 用 InputInt（带 +/- 按钮）而不是 SliderInt —— 见文件头的说明
+    ImGui::SameLine();
+    ImGui::TextUnformatted( zh::g::P_DEX );
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth( 90 );
+    ImGui::InputInt( "##dex", &g_p_dex, 1, 1 );
+
+    ImGui::SameLine( 0, GAP );
+    ImGui::TextUnformatted( zh::g::P_PER );
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth( 90 );
+    ImGui::InputInt( "##per", &g_p_per, 1, 1 );
+
+    ImGui::SameLine( 0, GAP );
+    ImGui::TextUnformatted( zh::g::P_STR );
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth( 90 );
+    ImGui::InputInt( "##str", &g_p_str, 1, 1 );
+
+    // 武器技能的标签随枪种变（选中步枪时显示「步枪等级」）
+    const char *gun_skill_name = ( g_selected >= 0 )
+                                 ? zh::skill( g_guns[g_selected].skill ).c_str()
+                                 : zh::g::P_SKILL;
+    ImGui::SameLine( 0, GAP );
+    ImGui::Text( zh::g::P_SKILL_FMT, gun_skill_name );
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth( 90 );
+    ImGui::InputInt( "##skill", &g_p_skill, 1, 1 );
+
+    ImGui::SameLine( 0, GAP );
+    ImGui::TextUnformatted( zh::g::P_MARKS );
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth( 90 );
+    ImGui::InputInt( "##marks", &g_p_marks, 1, 1 );
+
+    sync_character();
+    if( g_selected >= 0 ) {
+        g_ch.gun_skill = g_guns[g_selected].skill;
+    }
 }
 
-// 左侧：枪械列表
+// ---- 左侧：枪械列表 ---------------------------------------------------------
+
 void draw_gun_list()
 {
     ImGui::BeginChild( "list", ImVec2( 380, 0 ), ImGuiChildFlags_Borders );
@@ -107,9 +391,9 @@ void draw_gun_list()
                            ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
                            ImGuiTableFlags_ScrollY ) ) {
         ImGui::TableSetupScrollFreeze( 0, 1 );
-        ImGui::TableSetupColumn( "名称", ImGuiTableColumnFlags_WidthStretch );
-        ImGui::TableSetupColumn( "技能", ImGuiTableColumnFlags_WidthFixed, 56 );
-        ImGui::TableSetupColumn( "重量", ImGuiTableColumnFlags_WidthFixed, 72 );
+        ImGui::TableSetupColumn( zh::g::COL_NAME, ImGuiTableColumnFlags_WidthStretch );
+        ImGui::TableSetupColumn( zh::g::COL_SKILL, ImGuiTableColumnFlags_WidthFixed, 64 );
+        ImGui::TableSetupColumn( zh::g::COL_WEIGHT, ImGuiTableColumnFlags_WidthFixed, 80 );
         ImGui::TableHeadersRow();
 
         for( int idx : g_hits ) {
@@ -119,7 +403,7 @@ void draw_gun_list()
             ImGui::PushID( idx );
             if( ImGui::Selectable( g.name.c_str(), g_selected == idx,
                                    ImGuiSelectableFlags_SpanAllColumns ) ) {
-                g_selected = idx;
+                select_gun( idx );
             }
             ImGui::PopID();
             ImGui::TableNextColumn();
@@ -132,52 +416,315 @@ void draw_gun_list()
     ImGui::EndChild();
 }
 
-// 右侧：详情（第 3 步会填充完整内容）
-void draw_detail()
+// ---- 右侧：详情 -------------------------------------------------------------
+
+// 抬头 + 弹药选择
+void draw_detail_header( const Gun &g )
 {
-    ImGui::BeginChild( "detail", ImVec2( 0, 0 ), ImGuiChildFlags_Borders );
-    if( g_selected < 0 ) {
-        ImGui::TextDisabled( "从左边选一把枪" );
-        ImGui::EndChild();
-        return;
-    }
-
-    const Gun &g = g_guns[g_selected];
-    const Ammo *ammo = pick_default_ammo( g );
-
     ImGui::TextUnformatted( g.name.c_str() );
     ImGui::SameLine();
     ImGui::TextDisabled( "(%s)", g.id.c_str() );
     ImGui::Separator();
 
-    ImGui::Text( "技能：%s", zh::skill( g.skill ).c_str() );
-    ImGui::Text( "重量：%.0f g    体积：%.0f ml",
-                 effective_weight( g ), effective_volume( g ) );
-    if( ammo ) {
-        ImGui::Text( "弹药：%s", ammo->name.c_str() );
+    ImGui::Text( "%s：%s", zh::g::F_SKILL, zh::skill( g.skill ).c_str() );
+    ImGui::SameLine( 0, GAP * 2 );
+    ImGui::Text( "%s：%.0f g", zh::g::F_WEIGHT, effective_weight( g ) );
+    ImGui::SameLine( 0, GAP * 2 );
+    ImGui::Text( "%s：%.0f ml", zh::g::F_VOLUME, effective_volume( g ) );
+
+    // 弹药下拉框：换弹药会重算所有数值
+    ImGui::TextUnformatted( zh::g::F_AMMO );
+    ImGui::SameLine();
+    if( g_ammo_choices.empty() ) {
+        ImGui::TextDisabled( "%s", zh::g::NO_AMMO );
+        return;
+    }
+
+    const Ammo *cur = current_ammo();
+    ImGui::SetNextItemWidth( 420 );
+    if( ImGui::BeginCombo( "##ammo", cur ? cur->name.c_str() : "" ) ) {
+        for( int i = 0; i < (int)g_ammo_choices.size(); i++ ) {
+            const Ammo &a = g_ammo[g_ammo_choices[i]];
+            ImGui::PushID( i );
+            if( ImGui::Selectable( a.name.c_str(), g_ammo_pick == i ) ) {
+                g_ammo_pick = i;
+                g_detail.valid = false;
+                g_probs.valid  = false;
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndCombo();
+    }
+    if( cur ) {
+        ImGui::SameLine();
+        ImGui::TextDisabled( "(后坐 %.0f / 散布 %.0f)", cur->recoil, cur->dispersion );
+    }
+}
+
+// 已装配件（第 4 步会在这里加装配界面）
+void draw_mods( const Gun &g )
+{
+    if( !ImGui::CollapsingHeader( zh::g::SEC_MODS, ImGuiTreeNodeFlags_DefaultOpen ) ) {
+        return;
+    }
+    if( g.mods.empty() ) {
+        ImGui::TextDisabled( "%s", zh::g::NO_MODS );
+        return;
+    }
+
+    if( ImGui::BeginTable( "mods", 6,
+                           ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV ) ) {
+        ImGui::TableSetupColumn( zh::g::COL_MOD_NAME, ImGuiTableColumnFlags_WidthStretch );
+        ImGui::TableSetupColumn( zh::g::COL_MOD_SLOT, ImGuiTableColumnFlags_WidthFixed, 100 );
+        ImGui::TableSetupColumn( zh::g::COL_HANDLING, ImGuiTableColumnFlags_WidthFixed, 64 );
+        ImGui::TableSetupColumn( zh::g::COL_AIM, ImGuiTableColumnFlags_WidthFixed, 64 );
+        ImGui::TableSetupColumn( zh::g::COL_SIGHT, ImGuiTableColumnFlags_WidthFixed, 84 );
+        ImGui::TableSetupColumn( zh::g::COL_FOV, ImGuiTableColumnFlags_WidthFixed, 64 );
+        ImGui::TableHeadersRow();
+
+        for( const GunMod &m : g.mods ) {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn(); ImGui::TextUnformatted( m.name.c_str() );
+            ImGui::TableNextColumn(); ImGui::TextUnformatted( zh::slot( m.location ).c_str() );
+            ImGui::TableNextColumn(); ImGui::Text( "%+.0f", m.handling_modifier );
+            ImGui::TableNextColumn(); ImGui::Text( "%+.0f", m.aim_speed_modifier );
+            ImGui::TableNextColumn();
+            if( m.sight_dispersion >= 0 ) ImGui::Text( "%.0f", m.sight_dispersion );
+            else                          ImGui::TextDisabled( "—" );
+            ImGui::TableNextColumn();
+            if( m.field_of_view >= 0 ) ImGui::Text( "%.0f", m.field_of_view );
+            else                       ImGui::TextDisabled( "—" );
+        }
+        ImGui::EndTable();
+    }
+}
+
+// 瞄准参数
+void draw_aim_params( const Gun &g, const DetailCache &d )
+{
+    if( !ImGui::CollapsingHeader( zh::g::SEC_AIMPARAM, ImGuiTreeNodeFlags_DefaultOpen ) ) {
+        return;
+    }
+
+    kv( zh::g::VOL_FACTOR, "%.3f", aim_factor_from_volume( g, effective_volume( g ) ) );
+    kv( zh::g::LEN_FACTOR, "%.3f / %.3f",
+        aim_factor_from_length( g.longest_side_mm, false ),
+        aim_factor_from_length( g.longest_side_mm, true ) );
+    kv( zh::g::RECOIL_LIMIT, "%.0f", d.accuracy_limit );
+    kv( zh::g::TOTAL_DISP, "%.1f", d.fixed_disp );
+    kv( zh::g::ADDED_RECOIL, "%.0f", d.added_recoil );
+    note( zh::g::NOTE_ADDED, recoil_absorb( g_ch.skill_level ) * 100.0 );
+}
+
+// 游戏内显示值
+void draw_game_values( const Gun &g, const Ammo *ammo )
+{
+    if( !ImGui::CollapsingHeader( zh::g::SEC_GAMEVAL, ImGuiTreeNodeFlags_DefaultOpen ) ) {
+        return;
+    }
+    note( "%s", zh::g::GV_HINT );
+
+    const int d_gun  = (int)game_dispersion_gun( g );
+    const int d_ammo = (int)game_dispersion_ammo( g, ammo );
+    kv( zh::g::GV_DISP, "%d+%d = %d", d_gun, d_ammo, d_gun + d_ammo );
+    note( "%s", zh::g::NOTE_DISP );
+
+    // 腰射时（DISABLE_SIGHTS）压根没有瞄具，直接给腰射极限
+    const std::pair<int, int> sd = sight_dispersion_pair( g, g_ch );
+    const int psl = (int)point_shooting_limit( g_ch.skill( g.skill ), g.skill == "archery" );
+    if( psl <= sd.second ) {
+        kv( zh::g::GV_SIGHT_PS, "%d", psl );
     } else {
-        ImGui::TextDisabled( "弹药：（无适配弹药，可能需要先装上机匣）" );
+        kv( zh::g::GV_SIGHT, "%d+%d = %d", sd.first, sd.second - sd.first, sd.second );
+    }
+    note( "%s", zh::g::NOTE_SIGHT );
+
+    kv( zh::g::GV_RECOIL, "%.0f", game_recoil( g, g_ch, ammo ) );
+    note( "%s", zh::g::NOTE_RECOIL );
+    if( g.has_mod( "underbarrel" ) ) {
+        kv( zh::g::GV_BIPOD, "%.0f", game_recoil_bipod( g, g_ch, ammo ) );
+    }
+
+    kv( zh::g::GV_MINREC, "%.0f（%s）", game_min_recoil( g, g_ch, ammo ),
+        fmt_str( zh::g::GV_STR_REQ, (int)( gun_base_weight( g ) / 333.0 ) ).c_str() );
+    note( "%s", zh::g::NOTE_MINREC );
+}
+
+// 瞄准等级 —— 对应游戏物品界面里每档列出的两项
+void draw_aim_levels( const DetailCache &d )
+{
+    if( !ImGui::CollapsingHeader( zh::g::SEC_AIMLEVEL, ImGuiTreeNodeFlags_DefaultOpen ) ) {
+        return;
+    }
+    note( "%s", zh::g::NOTE_AIMLEVEL );
+
+    if( ImGui::BeginTable( "aimlv", 3,
+                           ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV ) ) {
+        ImGui::TableSetupColumn( zh::g::COL_AIMLEVEL, ImGuiTableColumnFlags_WidthStretch );
+        ImGui::TableSetupColumn( zh::g::COL_50RANGE, ImGuiTableColumnFlags_WidthFixed, 140 );
+        ImGui::TableSetupColumn( zh::g::COL_AIMTIME, ImGuiTableColumnFlags_WidthFixed, 140 );
+        ImGui::TableHeadersRow();
+
+        const struct { const char *name; int rng, mv; } rows[] = {
+            { zh::AIM_LEVEL_1, d.aim_range[0], d.aim.moves_to_regular },
+            { zh::AIM_LEVEL_2, d.aim_range[1], d.aim.moves_to_careful },
+            { zh::AIM_LEVEL_3, d.aim_range[2], d.aim.moves_to_precise },
+        };
+        for( const auto &r : rows ) {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn(); ImGui::TextUnformatted( r.name );
+            ImGui::TableNextColumn();
+            if( r.rng >= 59 ) ImGui::TextUnformatted( zh::g::OVER_TABLE );
+            else              ImGui::Text( zh::g::TILE_FMT, r.rng );
+            ImGui::TableNextColumn(); ImGui::Text( zh::g::AP, r.mv );
+        }
+        ImGui::EndTable();
+    }
+}
+
+// 瞄准时间线
+void draw_aim_timeline( const DetailCache &d )
+{
+    if( !ImGui::CollapsingHeader( zh::g::SEC_TIMELINE ) ) {
+        return;
+    }
+    note( "%s", zh::g::TIMELINE_HINT );
+
+    const struct { const char *name; int mv; } rows[] = {
+        { zh::AIM_LEVEL_1, d.aim.moves_to_regular },
+        { zh::AIM_LEVEL_2, d.aim.moves_to_careful },
+        { zh::AIM_LEVEL_3, d.aim.moves_to_precise },
+    };
+    for( const auto &r : rows ) {
+        ImGui::Bullet();
+        ImGui::Text( zh::g::TO_LEVEL, r.name );
+        ImGui::SameLine( LABEL_W );
+        ImGui::Text( zh::g::AP, r.mv );
     }
 
     ImGui::Spacing();
-    ImGui::SeparatorText( "游戏内显示值" );
+    kv( zh::g::ONE_TURN, "%.0f", d.aim.recoil_after_1_turn );
+    note( zh::g::THRESHOLDS, (int)d.aim.regular_th, (int)d.aim.careful_th,
+          (int)d.aim.precise_th );
+}
 
-    // 与游戏物品界面对齐的四项（0.I 格式：分项相加，原始值）
-    const int d_gun  = (int)game_dispersion_gun( g );
-    const int d_ammo = (int)game_dispersion_ammo( g, ammo );
+// 瞄准档位实例
+void draw_instance( const DetailCache &d )
+{
+    if( !ImGui::CollapsingHeader( zh::g::SEC_INSTANCE ) ) {
+        return;
+    }
+    note( "%s", zh::g::INSTANCE_HINT );
 
-    ImGui::Text( "散布（枪身+弹药）" );
-    ImGui::SameLine( 220 );
-    ImGui::Text( "%d+%d = %d", d_gun, d_ammo, d_gun + d_ammo );
+    if( ImGui::BeginTable( "instance", 5,
+                           ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV ) ) {
+        ImGui::TableSetupColumn( zh::g::COL_AIMLEVEL, ImGuiTableColumnFlags_WidthStretch );
+        ImGui::TableSetupColumn( zh::g::COL_RECOIL, ImGuiTableColumnFlags_WidthFixed, 100 );
+        ImGui::TableSetupColumn( zh::g::COL_FIXDISP, ImGuiTableColumnFlags_WidthFixed, 100 );
+        ImGui::TableSetupColumn( zh::g::COL_TOTDISP, ImGuiTableColumnFlags_WidthFixed, 100 );
+        ImGui::TableSetupColumn( zh::g::COL_50RANGE, ImGuiTableColumnFlags_WidthFixed, 140 );
+        ImGui::TableHeadersRow();
 
-    ImGui::Text( "实际后坐" );
-    ImGui::SameLine( 220 );
-    ImGui::Text( "%.0f", game_recoil( g, Character{}, ammo ) );
+        // 与命令行版一致：完全没瞄 = 最大后坐；另外三档 = 按瞄准进度插值
+        const double limit = d.accuracy_limit;
+        const struct { const char *name; double recoil; } rows[] = {
+            { zh::AIM_LEVEL_0, MAX_RECOIL },
+            { zh::AIM_LEVEL_1, ( ( MAX_RECOIL - limit ) / 10.0 ) + limit },
+            { zh::AIM_LEVEL_2, ( ( MAX_RECOIL - limit ) / 40.0 ) + limit },
+            { zh::AIM_LEVEL_3, limit },
+        };
+        for( const auto &r : rows ) {
+            const double total = d.fixed_disp + r.recoil;
+            const int rng = range_with_even_chance_of_good_hit( total );
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn(); ImGui::TextUnformatted( r.name );
+            ImGui::TableNextColumn(); ImGui::Text( "%.0f", r.recoil );
+            ImGui::TableNextColumn(); ImGui::Text( "%.0f", d.fixed_disp );
+            ImGui::TableNextColumn(); ImGui::Text( "%.0f", total );
+            ImGui::TableNextColumn();
+            if( rng >= 59 ) ImGui::TextUnformatted( zh::g::OVER_TABLE );
+            else            ImGui::Text( zh::g::TILE_FMT, rng );
+        }
+        ImGui::EndTable();
+    }
+}
 
-    ImGui::Text( "理论最小后坐力" );
-    ImGui::SameLine( 220 );
-    ImGui::Text( "%.0f（所需力量 %d）", game_min_recoil( g, Character{}, ammo ),
-                 (int)( gun_base_weight( g ) / 333.0 ) );
+// 命中档位概率（贵，只在展开时算）
+void draw_probabilities( const Gun &g, const Ammo *ammo )
+{
+    if( !ImGui::CollapsingHeader( zh::g::SEC_PROB, ImGuiTreeNodeFlags_DefaultOpen ) ) {
+        return;                       // 没展开就一分钱不花
+    }
+    note( "%s", zh::g::PROB_HINT );
+    note( "%s", zh::g::PROB_RULE );
+
+    if( !key_matches( g_probs, g_selected, g_ammo_pick ) ) {
+        compute_probs( g, ammo, g_detail.aim );
+    }
+
+    const char *lv_name[PROB_NLEVEL] = {
+        zh::AIM_LEVEL_0, zh::AIM_LEVEL_1, zh::AIM_LEVEL_2, zh::AIM_LEVEL_3
+    };
+
+    for( int L = 0; L < PROB_NLEVEL; L++ ) {
+        ImGui::Spacing();
+        ImGui::Text( zh::g::PROB_LEVEL, lv_name[L], (int)g_probs.th[L] );
+
+        ImGui::PushID( L );
+        if( ImGui::BeginTable( "prob", PROB_NTIER + 1,
+                               ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV ) ) {
+            ImGui::TableSetupColumn( zh::g::COL_DIST, ImGuiTableColumnFlags_WidthFixed, 90 );
+            for( int t = 0; t < PROB_NTIER; t++ ) {
+                ImGui::TableSetupColumn( zh::hit_tier_short( t ),
+                                         ImGuiTableColumnFlags_WidthStretch );
+            }
+            ImGui::TableHeadersRow();
+
+            for( int d = 0; d < PROB_NDIST; d++ ) {
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::Text( zh::g::TILE_FMT, (int)PROB_DISTS[d] );
+                for( int t = 0; t < PROB_NTIER; t++ ) {
+                    ImGui::TableNextColumn();
+                    ImGui::Text( "%.1f%%", g_probs.pct[L][d][t] );
+                }
+            }
+            ImGui::EndTable();
+        }
+        ImGui::PopID();
+    }
+}
+
+void draw_detail()
+{
+    ImGui::BeginChild( "detail", ImVec2( 0, 0 ), ImGuiChildFlags_Borders );
+    if( g_selected < 0 ) {
+        ImGui::TextDisabled( "%s", zh::g::PICK_GUN );
+        ImGui::EndChild();
+        return;
+    }
+
+    const Gun  &g    = g_guns[g_selected];
+    const Ammo *ammo = current_ammo();
+
+    draw_detail_header( g );
+    if( ammo == nullptr ) {
+        ImGui::EndChild();
+        return;
+    }
+
+    if( !key_matches( g_detail, g_selected, g_ammo_pick ) ) {
+        compute_detail( g, ammo );
+    }
+
+    ImGui::Spacing();
+    draw_mods( g );
+    draw_aim_params( g, g_detail );
+    draw_game_values( g, ammo );
+    draw_aim_levels( g_detail );
+    draw_aim_timeline( g_detail );
+    draw_instance( g_detail );
+    draw_probabilities( g, ammo );
 
     ImGui::EndChild();
 }
@@ -207,10 +754,22 @@ void draw_ui()
 //  主程序
 // =============================================================================
 
-int main( int, char ** )
+int main( int argc, char **argv )
 {
+    // stdout 重定向到文件/管道时默认是「全缓冲」，进程被强杀就一个字都留不下。
+    // 下面那两条启动诊断（字体路径、窗口尺寸）是排查界面问题的第一手线索，
+    // 必须随打随见，所以设成不缓冲。整个程序一共就打印两三行，不差这点开销。
+    std::setvbuf( stdout, nullptr, _IONBF, 0 );
+
     init_database();
+
+    if( argc > 1 ) {
+        std::snprintf( g_search, sizeof( g_search ), "%s", argv[1] );
+    }
     refresh_hits();
+    if( !g_hits.empty() ) {
+        select_gun( g_hits[0] );
+    }
 
     if( !SDL_Init( SDL_INIT_VIDEO ) ) {
         std::printf( "SDL_Init 失败：%s\n", SDL_GetError() );
@@ -230,6 +789,21 @@ int main( int, char ** )
     // 显式显示并提到前台（虽然 SDL3 默认就会显示，但某些环境下不会自动置顶）
     SDL_ShowWindow( win );
     SDL_RaiseWindow( win );
+
+    // 启动时把尺寸打出来。高 DPI 缩放下「窗口逻辑尺寸」和「实际像素尺寸」可能
+    // 不一致，一旦 ImGui 的布局尺寸大于 framebuffer，界面右边就会被切掉 ——
+    // 这一行能立刻看出是哪一边不对。
+    {
+        int lw = 0, lh = 0, pw = 0, ph = 0;
+        SDL_GetWindowSize( win, &lw, &lh );
+        SDL_GetWindowSizeInPixels( win, &pw, &ph );
+        const SDL_DisplayID disp = SDL_GetPrimaryDisplay();
+        SDL_Rect ub{ 0, 0, 0, 0 };
+        SDL_GetDisplayUsableBounds( disp, &ub );
+        std::printf( "窗口 %dx%d 逻辑 / %dx%d 像素；屏幕可用区 %dx%d，缩放 %.3f\n",
+                     lw, lh, pw, ph, ub.w, ub.h,
+                     (double)SDL_GetDisplayContentScale( disp ) );
+    }
 
     SDL_Renderer *ren = SDL_CreateRenderer( win, nullptr );
     if( ren == nullptr ) {

@@ -75,6 +75,14 @@ inline const char *hit_tier( double missed_by )
     return "爆头";
 }
 
+// 命中档位的短名，用于表格列头（长版本见上面的 hit_tier()，那个带伤害区间说明）。
+// 参数是「未命中度」换算出来的档位序号，0 最准、5 脱靶。
+inline const char *hit_tier_short( int tier )
+{
+    static const char *names[6] = { "爆头", "暴击", "好击", "普通", "擦伤", "脱靶" };
+    return ( tier >= 0 && tier < 6 ) ? names[tier] : "?";
+}
+
 // 瞄准档位名（对应游戏里的 Regular / Careful / Precise）
 inline const char *AIM_LEVEL_1 = "普通档";
 inline const char *AIM_LEVEL_2 = "仔细档";
@@ -298,5 +306,122 @@ inline const char *P_STR         = "  力量 [8]: ";
 inline const char *DONE          = "\n完成。按回车退出。";
 
 } // namespace t
+
+// =============================================================================
+//  三、图形界面用文本（src/gui/）
+// =============================================================================
+//  t:: 里那套是给终端排版用的：左对齐补空格、行尾带 ":"、行首缩进，
+//  直接搬进 GUI 会多出一堆无意义的空白。这里放 GUI 专用的干净文案。
+//
+//  不要为了省事去裁 t:: 的字符串 —— 两边排版需求不同，共用一个字符串
+//  的结果是两边都别扭。
+namespace g {
+
+// ---- 顶部工具栏 ----
+inline const char *SEARCH_HINT  = "搜索：中文名 / 英文名 / id / 别名";
+inline const char *CLEAR        = "清空";
+inline const char *COUNT_FMT    = "%d / %d 把";
+inline const char *PICK_GUN     = "从左边选一把枪";
+
+// 人物参数（详情里所有数字都随这几个值变）
+inline const char *P_DEX        = "敏捷";
+inline const char *P_PER        = "感知";
+inline const char *P_STR        = "力量";
+inline const char *P_SKILL      = "武器技能";
+inline const char *P_MARKS      = "枪械技能";
+inline const char *P_SKILL_FMT  = "%s等级";     // 参数是 zh::skill() 的结果
+inline const char *CHAR_HINT    = "人物参数（改动会立刻重算右边所有数值）";
+
+// ---- 列表列头 ----
+inline const char *COL_NAME     = "名称";
+inline const char *COL_SKILL    = "技能";
+inline const char *COL_WEIGHT   = "重量";
+
+// ---- 详情：抬头 ----
+inline const char *F_SKILL      = "技能";
+inline const char *F_WEIGHT     = "重量";
+inline const char *F_VOLUME     = "体积";
+inline const char *F_AMMO       = "弹药";
+inline const char *NO_AMMO      =
+    "无适配弹药 —— 模块化枪械（如 M16）要先装上机匣才确定口径";
+
+// ---- 详情：分区标题 ----
+inline const char *SEC_MODS     = "已装配件";
+inline const char *SEC_AIMPARAM = "瞄准参数";
+inline const char *SEC_GAMEVAL  = "游戏内显示值";
+inline const char *SEC_AIMLEVEL = "瞄准等级";
+inline const char *SEC_TIMELINE = "瞄准时间线";
+inline const char *SEC_INSTANCE = "瞄准档位实例";
+inline const char *SEC_PROB     = "命中档位概率";
+inline const char *NO_MODS      = "（未安装任何配件）";
+
+// 配件表列头
+inline const char *COL_MOD_NAME = "配件";
+inline const char *COL_MOD_SLOT = "槽位";
+inline const char *COL_HANDLING = "操控";
+inline const char *COL_AIM      = "瞄准";
+inline const char *COL_SIGHT    = "瞄准散布";
+inline const char *COL_FOV      = "视野";
+
+// ---- 瞄准参数 ----
+inline const char *VOL_FACTOR   = "体积因子";
+inline const char *LEN_FACTOR   = "长度因子（空旷 / 贴墙）";
+inline const char *TOTAL_DISP   = "总散布（含技能惩罚）";
+inline const char *RECOIL_LIMIT = "瞄准精度上限";
+inline const char *ADDED_RECOIL = "每发增加的瞄准误差";
+inline const char *NOTE_ADDED   = "开一枪给瞄准误差加的量，技能吸收 %.0f%%";
+
+// ---- 游戏内显示值 ----
+inline const char *GV_HINT      =
+    "与游戏物品界面显示的数字一致，可随时照着核对（0.I 格式：分项相加）";
+inline const char *GV_DISP      = "散布（枪身+弹药）";
+inline const char *GV_SIGHT     = "瞄准散布（瞄具+视差）";
+inline const char *GV_SIGHT_PS  = "瞄准散布（腰射）";
+inline const char *GV_RECOIL    = "实际后坐";
+inline const char *GV_BIPOD     = "两脚架架设时";
+inline const char *GV_MINREC    = "理论最小后坐力";
+inline const char *GV_STR_REQ   = "所需力量 %d";
+inline const char *NOTE_DISP    =
+    "子弹的抖动角度。误差随距离线性放大：1 格时几乎无差别，20 格外就很明显";
+inline const char *NOTE_SIGHT   =
+    "瞄准能压到的误差下限 —— 瞄得再久也不会低于它。由瞄具散布 + 感知造成的视差组成";
+inline const char *NOTE_RECOIL  =
+    "每开一枪给瞄准误差增加 5 倍该值（技能最多吸收一半）。涨上去只能靠重新瞄准压回来";
+inline const char *NOTE_MINREC  =
+    "力量补足到「所需力量」后能达到的后坐，是这把枪的下限。等于实际后坐说明力量已够";
+
+// ---- 瞄准等级 ----
+inline const char *COL_AIMLEVEL = "瞄准等级";
+inline const char *COL_50RANGE  = "50%命中距离";
+inline const char *COL_AIMTIME  = "瞄准用时";
+inline const char *NOTE_AIMLEVEL =
+    "50%%命中距离 = 该距离上约有一半概率打出「好击」；瞄准用时 = 从完全没瞄压到这一档要花多少行动点（1 回合 = 100 点）";
+inline const char *AP           = "%d 行动点";
+inline const char *TILE_FMT     = "%d 格";
+inline const char *OVER_TABLE   = "59+ 格（视野上限）";
+
+// ---- 瞄准时间线 ----
+inline const char *TO_LEVEL     = "压到%s";     // 参数是 zh::AIM_LEVEL_n
+inline const char *ONE_TURN     = "一回合（100 行动点）后瞄准误差降到";
+inline const char *THRESHOLDS   = "档位阈值：普通 %d / 仔细 %d / 精准 %d";
+inline const char *TIMELINE_HINT =
+    "从瞄准误差 3000 开始，每消耗 1 点行动力降低一次";
+
+// ---- 瞄准档位实例 ----
+inline const char *COL_RECOIL   = "瞄准误差";
+inline const char *COL_FIXDISP  = "固定散布";
+inline const char *COL_TOTDISP  = "总散布";
+inline const char *INSTANCE_HINT =
+    "总散布 = 瞄准误差 + 固定散布。固定散布不随瞄准进度变化（枪身+弹药散布 ÷18、敏捷修正、技能不足惩罚三项相加）；目标体积按 1.0 格的人形怪计算";
+
+// ---- 命中档位概率 ----
+inline const char *COL_DIST     = "距离";
+inline const char *PROB_HINT    =
+    "对指定距离的目标开一枪，各命中档位出现的概率。每档采样 20 万次，固定种子，结果不会每次运行都变";
+inline const char *PROB_RULE    =
+    "判定阈值（未命中度，越小越准）：爆头 0.1 / 暴击 0.2 / 好击 0.5 / 普通 0.8 / 擦伤 1.0 / 脱靶 ≥1.0";
+inline const char *PROB_LEVEL   = "%s（瞄准误差 %d）";
+
+} // namespace g
 
 } // namespace zh
