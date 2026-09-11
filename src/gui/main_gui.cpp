@@ -26,6 +26,7 @@
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <random>
 #include <string>
@@ -1080,11 +1081,25 @@ void draw_ui()
 //  主程序
 // =============================================================================
 
+// 启动阶段失败时的报错。
+//
+// ★ 这个 exe 是 GUI 子系统（CMakeLists 里设了 WIN32_EXECUTABLE），没有控制台，
+//   所以 printf 给双击启动的用户看是白搭 —— 必须弹消息框，否则现象就是
+//   「双击了，什么都没发生」。printf 留着，是为了重定向到文件时还能收到。
+[[noreturn]] void fatal( const char *what )
+{
+    const std::string msg = fmt_str( "%s：%s", what, SDL_GetError() );
+    std::printf( "%s\n", msg.c_str() );
+    SDL_ShowSimpleMessageBox( SDL_MESSAGEBOX_ERROR, "gunlab 启动失败",
+                              msg.c_str(), nullptr );
+    std::exit( 1 );
+}
+
 int main( int argc, char **argv )
 {
-    // stdout 重定向到文件/管道时默认是「全缓冲」，进程被强杀就一个字都留不下。
-    // 下面那两条启动诊断（字体路径、窗口尺寸）是排查界面问题的第一手线索，
-    // 必须随打随见，所以设成不缓冲。整个程序一共就打印两三行，不差这点开销。
+    // 没有控制台，stdout 只在你主动重定向时才有去处。重定向到文件/管道时
+    // 默认是「全缓冲」，进程被强杀就一个字都留不下 —— 下面那两条启动诊断
+    // （字体路径、窗口尺寸）是排查界面问题的第一手线索，必须随打随见。
     std::setvbuf( stdout, nullptr, _IONBF, 0 );
 
     init_database();
@@ -1097,11 +1112,8 @@ int main( int argc, char **argv )
         select_gun( g_hits[0] );
     }
 
-
-
     if( !SDL_Init( SDL_INIT_VIDEO ) ) {
-        std::printf( "SDL_Init 失败：%s\n", SDL_GetError() );
-        return 1;
+        fatal( "SDL 初始化失败" );
     }
 
     SDL_Window *win = SDL_CreateWindow( "gunlab — Cataclysm 枪械计算器",
@@ -1109,9 +1121,7 @@ int main( int argc, char **argv )
                                         SDL_WINDOW_RESIZABLE |
                                         SDL_WINDOW_HIGH_PIXEL_DENSITY );
     if( win == nullptr ) {
-        std::printf( "创建窗口失败：%s\n", SDL_GetError() );
-        SDL_Quit();
-        return 1;
+        fatal( "创建窗口失败" );
     }
 
     // 显式显示并提到前台（虽然 SDL3 默认就会显示，但某些环境下不会自动置顶）
@@ -1135,7 +1145,11 @@ int main( int argc, char **argv )
 
     SDL_Renderer *ren = SDL_CreateRenderer( win, nullptr );
     if( ren == nullptr ) {
-        std::printf( "创建渲染器失败：%s\n", SDL_GetError() );
+        // 窗口已经建出来了，报错框还能挂在它上面（不挂就是独立的一个框）
+        const std::string msg = fmt_str( "创建渲染器失败：%s", SDL_GetError() );
+        std::printf( "%s\n", msg.c_str() );
+        SDL_ShowSimpleMessageBox( SDL_MESSAGEBOX_ERROR, "gunlab 启动失败",
+                                  msg.c_str(), win );
         SDL_DestroyWindow( win );
         SDL_Quit();
         return 1;

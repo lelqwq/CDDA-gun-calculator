@@ -77,6 +77,11 @@ if(SDL3_FOUND)
     target_compile_definitions(gunlab_gui PRIVATE SDL_MAIN_HANDLED)
 
     set_target_properties(gunlab_gui PROPERTIES
+        # ★ 必须设成 GUI 子系统，否则 Windows 会给它挂一个控制台窗口 ——
+        #   双击时先弹一个黑框，很难看。MinGW 下等价于 -mwindows。
+        #   代价是没有了 stdout：启动诊断只在重定向到文件时才收得到，
+        #   所以启动失败的提示改用消息框（见 main_gui.cpp 的 fatal()）。
+        WIN32_EXECUTABLE TRUE
         RUNTIME_OUTPUT_DIRECTORY         "${CMAKE_BINARY_DIR}"
         RUNTIME_OUTPUT_DIRECTORY_DEBUG   "${CMAKE_BINARY_DIR}"
         RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}"
