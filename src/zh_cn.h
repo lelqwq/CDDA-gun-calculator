@@ -26,15 +26,21 @@ namespace zh {
 // =============================================================================
 
 // 技能名
+//
+//  中文取自游戏 skills.json 里各技能的 name 字段在 .mo 里的官方译文 ——
+//  注意技能的**显示名和 id 不是一回事**（id "launcher" 显示名是 "launchers"，
+//  译作「重武器」而不是「发射器」；id "gun" 显示名是 "marksmanship"，译作
+//  「枪法」）。照 id 直译会和游戏界面对不上。
 inline std::string skill( const std::string &key )
 {
     if( key == "rifle" )    return "步枪";
     if( key == "pistol" )   return "手枪";
     if( key == "shotgun" )  return "霰弹枪";
     if( key == "smg" )      return "冲锋枪";
-    if( key == "launcher" ) return "发射器";
+    if( key == "launcher" ) return "重武器";
     if( key == "archery" )  return "弓术";
-    if( key == "gun" )      return "枪械";
+    if( key == "gun" )      return "枪法";
+    if( key == "throw" )    return "投掷";
     return key;
 }
 
