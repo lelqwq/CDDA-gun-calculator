@@ -23,6 +23,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdarg>
 #include <cstdio>
 #include <filesystem>
@@ -122,6 +123,9 @@ struct DetailCache {
     int       aim_range[3] = { 0, 0, 0 };     // 三个档位各自的 50%好击距离
     double    accuracy_limit = 0.0;
     double    added_recoil   = 0.0;
+
+    // 瞄准收益曲线：curve[t] = 第 t 回合的 50%好击距离
+    std::vector<int> curve;
 };
 
 constexpr int    PROB_N      = 200000;
@@ -171,6 +175,23 @@ void kv( const char *label, const char *fmt, ... )
     std::vsnprintf( buf, sizeof( buf ), fmt, ap );
     va_end( ap );
     ImGui::TextUnformatted( buf );
+}
+
+// 给坐标轴挑一个「好看」的刻度步长：结果一定是 1/2/5 × 10ⁿ，
+// 这样刻度标签是 5 / 10 / 20 而不是 7 / 14 / 21
+double nice_step( double range, int target_ticks )
+{
+    if( range <= 0.0 || target_ticks <= 0 ) {
+        return 1.0;
+    }
+    const double raw  = range / target_ticks;
+    const double mag  = std::pow( 10.0, std::floor( std::log10( raw ) ) );
+    const double norm = raw / mag;
+    const double pick = ( norm <= 1.0 ) ? 1.0
+                      : ( norm <= 2.0 ) ? 2.0
+                      : ( norm <= 5.0 ) ? 5.0
+                      : 10.0;
+    return pick * mag;
 }
 
 // 灰色小字说明，自动换行
@@ -352,6 +373,44 @@ void compute_detail( const Gun &g, const Ammo *ammo )
     for( int i = 0; i < 3; i++ ) {
         g_detail.aim_range[i] =
             range_with_even_chance_of_good_hit( g_detail.fixed_disp + th[i] );
+    }
+
+    // ---- 瞄准收益曲线 -------------------------------------------------------
+    // 逐回合推进瞄准，记录每一回合能打到多远。与命令行版 print_range_curve
+    // 逐行对应（含 ctx 的取法）—— 两边必须给出一条一样的曲线。
+    {
+        AimContext cctx;
+        cctx.len_factor = 1.0;
+        cctx.limit      = g_detail.accuracy_limit;
+        cctx.vol_factor = aim_factor_from_volume( g, effective_volume( g ) );
+
+        const int TURN = 100;     // 一回合的行动点
+        const int MAXT = 20;      // 最多算 20 回合
+        g_detail.curve.clear();
+
+        double recoil = MAX_RECOIL;
+        int    flat   = 0;
+        for( int t = 0; t <= MAXT; t++ ) {
+            g_detail.curve.push_back(
+                range_with_even_chance_of_good_hit( g_detail.fixed_disp + recoil ) );
+
+            const size_t n = g_detail.curve.size();
+            if( t > 0 && g_detail.curve[n - 1] == g_detail.curve[n - 2] ) {
+                if( ++flat >= 3 ) {
+                    break;         // 连续 3 回合没变化，再瞄也没意义了
+                }
+            } else {
+                flat = 0;
+            }
+
+            for( int i = 0; i < TURN && recoil > cctx.limit; i++ ) {
+                const double amt = aim_per_move( g, g_ch, recoil, cctx );
+                if( amt <= 0 ) {
+                    break;
+                }
+                recoil = std::max( cctx.limit, recoil - amt );
+            }
+        }
     }
 
     store_key( g_detail );
@@ -751,6 +810,126 @@ void draw_aim_timeline( const DetailCache &d )
           (int)d.aim.precise_th );
 }
 
+// 瞄准收益曲线 —— 用 ImDrawList 手绘
+//
+// 为什么不用 ImPlot：本机取不到（没网络，游戏源码的 third-party 里也没有），
+// 而为了一个折线图去引第三方库不划算。坐标轴、网格、折线、填充、悬停提示
+// 手写下来一共百来行，还省掉一个新依赖的构建麻烦。
+void draw_range_curve( const DetailCache &d )
+{
+    if( !ImGui::CollapsingHeader( zh::g::SEC_CURVE, ImGuiTreeNodeFlags_DefaultOpen ) ) {
+        return;
+    }
+    note( "%s", zh::g::CURVE_HINT );
+
+    const int N = (int)d.curve.size();
+    if( N < 2 ) {
+        return;
+    }
+
+    const float  W      = std::max( 360.0f, ImGui::GetContentRegionAvail().x - 8.0f );
+    const float  H      = 280.0f;
+    const ImVec2 origin = ImGui::GetCursorScreenPos();
+
+    ImGui::InvisibleButton( "##curve", ImVec2( W, H ) );
+    const bool   hovered = ImGui::IsItemHovered();
+    const ImVec2 mouse   = ImGui::GetIO().MousePos;
+
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+
+    // 绘图区。四周的边距留给坐标轴：左边放 Y 刻度数字，下面放 X 刻度数字，
+    // 上面一行放 Y 轴名。B 要够大 —— 刻度数字和轴名是上下两行，留窄了会叠在一起
+    const float L = 56.0f, R = 18.0f, T = 36.0f, B = 52.0f;
+    const ImVec2 a( origin.x + L,     origin.y + T );
+    const ImVec2 b( origin.x + W - R, origin.y + H - B );
+
+    int maxY = 1;
+    for( int v : d.curve ) {
+        maxY = std::max( maxY, v );
+    }
+    const double step = nice_step( maxY, 5 );
+    const double top  = std::max( step, std::ceil( maxY / step ) * step );
+
+    auto px = [&]( int t ) {
+        return a.x + ( b.x - a.x ) * (float)t / (float)std::max( 1, N - 1 );
+    };
+    auto py = [&]( double v ) {
+        return b.y - ( b.y - a.y ) * (float)( v / top );
+    };
+
+    const ImU32 col_bg   = ImGui::GetColorU32( ImGuiCol_FrameBg );
+    const ImU32 col_grid = ImGui::GetColorU32( ImGuiCol_Border, 0.7f );
+    const ImU32 col_axis = ImGui::GetColorU32( ImGuiCol_Text, 0.45f );
+    const ImU32 col_text = ImGui::GetColorU32( ImGuiCol_Text, 0.60f );
+    const ImU32 col_line = IM_COL32( 100, 180, 255, 255 );
+    const ImU32 col_fill = IM_COL32( 100, 180, 255, 40 );
+    const ImU32 col_dot  = IM_COL32( 170, 215, 255, 255 );
+
+    dl->AddRectFilled( a, b, col_bg );
+
+    // 横向网格 + Y 轴刻度
+    for( double v = 0.0; v <= top + 1e-9; v += step ) {
+        const float y = py( v );
+        dl->AddLine( ImVec2( a.x, y ), ImVec2( b.x, y ), col_grid );
+        const std::string lab = fmt_str( "%d", (int)v );
+        const ImVec2 ts = ImGui::CalcTextSize( lab.c_str() );
+        dl->AddText( ImVec2( a.x - 8.0f - ts.x, y - ts.y * 0.5f ), col_text, lab.c_str() );
+    }
+
+    // 纵向网格 + X 轴刻度（回合多了就隔几个标一个，别挤成一团）
+    const int xstep = std::max( 1, ( N - 1 ) / 10 );
+    for( int t = 0; t < N; t += xstep ) {
+        const float x = px( t );
+        dl->AddLine( ImVec2( x, a.y ), ImVec2( x, b.y ), col_grid );
+        const std::string lab = fmt_str( "%d", t );
+        const ImVec2 ts = ImGui::CalcTextSize( lab.c_str() );
+        dl->AddText( ImVec2( x - ts.x * 0.5f, b.y + 6.0f ), col_text, lab.c_str() );
+    }
+
+    // 坐标轴
+    dl->AddLine( ImVec2( a.x, b.y ), ImVec2( b.x, b.y ), col_axis, 1.5f );
+    dl->AddLine( ImVec2( a.x, a.y ), ImVec2( a.x, b.y ), col_axis, 1.5f );
+
+    // 折线 + 下面垫一层半透明填充
+    std::vector<ImVec2> pts;
+    pts.reserve( N );
+    for( int t = 0; t < N; t++ ) {
+        pts.emplace_back( px( t ), py( d.curve[t] ) );
+    }
+    for( int t = 0; t + 1 < N; t++ ) {
+        dl->AddQuadFilled( pts[t], pts[t + 1],
+                           ImVec2( pts[t + 1].x, b.y ), ImVec2( pts[t].x, b.y ), col_fill );
+    }
+    dl->AddPolyline( pts.data(), N, col_line, ImDrawFlags_None, 2.0f );
+    for( const ImVec2 &p : pts ) {
+        dl->AddCircleFilled( p, 3.0f, col_dot );
+    }
+
+    // 悬停：竖线 + 该回合的数值
+    if( hovered && mouse.x >= a.x - 6.0f && mouse.x <= b.x + 6.0f ) {
+        int t = (int)std::lround( ( mouse.x - a.x ) / ( b.x - a.x )
+                                  * (float)std::max( 1, N - 1 ) );
+        t = std::max( 0, std::min( N - 1, t ) );
+        const ImVec2 p = pts[t];
+        dl->AddLine( ImVec2( p.x, a.y ), ImVec2( p.x, b.y ),
+                     ImGui::GetColorU32( ImGuiCol_Text, 0.3f ) );
+        dl->AddCircleFilled( p, 5.0f, col_line );
+
+        ImGui::BeginTooltip();
+        ImGui::Text( zh::g::CURVE_TIP, t, d.curve[t] );
+        ImGui::EndTooltip();
+    }
+
+    // 轴名。这两个是字面量，直接画 —— 别丢进 printf，里面那个 % 会被当格式符。
+    // Y 轴名放绘图区左上角（竖排太麻烦），X 轴名居中放在刻度下面
+    dl->AddText( ImVec2( a.x, origin.y + 6.0f ), col_text, zh::g::AXIS_RANGE );
+    {
+        const ImVec2 ts = ImGui::CalcTextSize( zh::g::AXIS_TURN );
+        dl->AddText( ImVec2( ( a.x + b.x ) * 0.5f - ts.x * 0.5f, b.y + 28.0f ),
+                     col_text, zh::g::AXIS_TURN );
+    }
+}
+
 // 瞄准档位实例
 void draw_instance( const DetailCache &d )
 {
@@ -869,6 +1048,7 @@ void draw_detail()
     draw_game_values( g, ammo );
     draw_aim_levels( g_detail );
     draw_aim_timeline( g_detail );
+    draw_range_curve( g_detail );
     draw_instance( g_detail );
     draw_probabilities( g, ammo );
 
@@ -916,6 +1096,7 @@ int main( int argc, char **argv )
     if( !g_hits.empty() ) {
         select_gun( g_hits[0] );
     }
+
 
 
     if( !SDL_Init( SDL_INIT_VIDEO ) ) {

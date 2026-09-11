@@ -352,7 +352,20 @@ inline const char *SEC_GAMEVAL  = "游戏内显示值";
 inline const char *SEC_AIMLEVEL = "瞄准等级";
 inline const char *SEC_TIMELINE = "瞄准时间线";
 inline const char *SEC_INSTANCE = "瞄准档位实例";
+inline const char *SEC_CURVE    = "瞄准收益曲线";
 inline const char *SEC_PROB     = "命中档位概率";
+
+// 瞄准收益曲线（图形版用 ImDrawList 手绘，不是 ImPlot）
+//
+// ★ 注意这个文件里两类字符串的区别：
+//   - 走 note("%s", X) / TextUnformatted(X) 传的是**字面量**，百分号就写一个 %；
+//   - 直接当 printf 格式串用的（比如下面的 CURVE_TIP），转义百分号才写 %%。
+//   写错了不会报错，只会在界面上多出一个百分号。
+inline const char *CURVE_HINT   =
+    "横轴 = 瞄准回合（1 回合 = 100 行动点），纵轴 = 50%好击距离。曲线到顶后就白瞄了 —— 瞄准误差压到精度下限便再也降不下去。鼠标移到图上可看具体数值";
+inline const char *AXIS_TURN    = "瞄准回合";
+inline const char *AXIS_RANGE   = "50%好击距离（格）";
+inline const char *CURVE_TIP    = "%d 回合\n%d 格";
 inline const char *NO_MODS      = "（未安装任何配件）";
 
 // 配件安装 / 移除
@@ -405,7 +418,7 @@ inline const char *COL_AIMLEVEL = "瞄准等级";
 inline const char *COL_50RANGE  = "50%命中距离";
 inline const char *COL_AIMTIME  = "瞄准用时";
 inline const char *NOTE_AIMLEVEL =
-    "50%%命中距离 = 该距离上约有一半概率打出「好击」；瞄准用时 = 从完全没瞄压到这一档要花多少行动点（1 回合 = 100 点）";
+    "50%命中距离 = 该距离上约有一半概率打出「好击」；瞄准用时 = 从完全没瞄压到这一档要花多少行动点（1 回合 = 100 点）";
 inline const char *AP           = "%d 行动点";
 inline const char *TILE_FMT     = "%d 格";
 inline const char *OVER_TABLE   = "59+ 格（视野上限）";
