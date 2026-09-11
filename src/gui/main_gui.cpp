@@ -177,11 +177,21 @@ std::string fmt_str( const char *fmt, ... )
     return std::string( buf );
 }
 
+// 把光标移到「上一段文字右侧」：至少 min_x，文字比 min_x 还宽时再往后让。
+//
+// ★ 不要直接用 ImGui::SameLine(固定值) 对齐 —— 上一段文字一旦超过那个位置，
+//   下一段就会画到它上面去。中文标签特别容易超：一个汉字约 18px，
+//   「一回合（100 行动点）后瞄准误差降到」就有 300px 了，而 LABEL_W 才 220。
+void same_line_after( const char *rendered, float min_x = LABEL_W )
+{
+    ImGui::SameLine( std::max( min_x, ImGui::CalcTextSize( rendered ).x + GAP ) );
+}
+
 // 「标签 ←(对齐到 LABEL_W)→ 数值」
 void kv( const char *label, const char *fmt, ... )
 {
     ImGui::TextUnformatted( label );
-    ImGui::SameLine( LABEL_W );
+    same_line_after( label );
 
     char buf[512];
     va_list ap;
@@ -844,7 +854,12 @@ void draw_mods( const Gun &g )
                     ImGui::CloseCurrentPopup();
                 }
                 ImGui::PopID();
-                ImGui::SameLine( 330 );
+                // 按实际宽度让位，别写死 330。当前最长的配件名约 306px，
+                // 加间距还不到 330，所以现在走的是 330 这一支，与改前一致；
+                // 以后加了更长的名字才轮到让位。
+                // （差一点点：Selectable 的文字有个 FramePadding 的左缩进没算进来，
+                //   真触发的那天会少让约 8px，不影响可读性）
+                same_line_after( m.name.c_str(), 330.0f );
                 // 上机匣会带来口径，列出来才知道装上去能打什么弹
                 const std::string ammo_note =
                     m.ammo_modifier.empty() ? "" : ( "  " + m.ammo_modifier[0] );
@@ -965,8 +980,9 @@ void draw_aim_timeline( const DetailCache &d )
     };
     for( const auto &r : rows ) {
         ImGui::Bullet();
-        ImGui::Text( zh::g::TO_LEVEL, r.name );
-        ImGui::SameLine( LABEL_W );
+        const std::string line = fmt_str( zh::g::TO_LEVEL, r.name );
+        ImGui::TextUnformatted( line.c_str() );
+        same_line_after( line.c_str() );
         ImGui::Text( zh::g::AP, r.mv );
     }
 
