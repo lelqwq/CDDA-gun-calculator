@@ -61,11 +61,59 @@ def parse_unit(value, units, default=0.0):
 #  数据加载与继承解析
 # =============================================================================
 
+# ---- 哪些「枪」其实不是枪械 ------------------------------------------------
+# 游戏数据里有几类条目带 GUN 子类型，但不是玩家能装备的枪械。判据用游戏
+# 自己的标志和目录位置，不硬编码条目 id —— 游戏加新条目时不用改这里。
+
+# 这些目录里的东西按定义就不是「能拿到的枪」：
+#   obsoletion_and_migration_*  已从游戏里删除、只为老存档留着的定义
+#                               （如 PPSh-41、Saiga-410、American-180）
+#   monster_special_attacks     怪物特殊攻击的数值模板（acid dart gun 之类）
+EXCLUDE_DIRS = ("obsoletion_and_migration", "monster_special_attacks")
+
+# 这些标志一出现就说明不是普通枪械：
+#   PRIMITIVE_RANGED_WEAPON  弓弩、投石索、掷矛器。★ 光按技能滤不掉 ——
+#                            有些弩在游戏里归在 rifle/pistol 技能下
+#                            （crossbow / hand_crossbow / bullet_crossbow…）
+#   BIONIC_WEAPON            义体武器，玩家装备不了
+#   PSEUDO                   只作数值模板、游戏里拿不到的伪物品
+EXCLUDE_FLAGS = ("PRIMITIVE_RANGED_WEAPON", "BIONIC_WEAPON", "PSEUDO")
+
+
+def exclude_reason(db, oid, o):
+    """返回排除原因（字符串）；None 表示保留。"""
+    for p in db.paths_of.get(oid, []):
+        norm = p.replace("\\", "/")
+        for d in EXCLUDE_DIRS:
+            if d in norm:
+                return d
+
+    r = db.resolve(o)
+    flags = r.get("flags") or []
+    for f in EXCLUDE_FLAGS:
+        if f in flags:
+            return f
+
+    # 没有任何「能开火」的模式 —— 典型例子是「可拆卸反曲弓（折叠）」，
+    # 它的模式是 [ "DEFAULT", "disassembled", 0, [ "MELEE" ] ]：发数 0，
+    # 是收纳状态、只能近战，要用 use_action 组装回展开状态才能射。
+    # 这种没有 PRIMITIVE_RANGED_WEAPON（那一版才挂），得靠发数滤。
+    modes = r.get("modes")
+    if modes:
+        shootable = any(isinstance(m, list) and len(m) >= 3
+                        and isinstance(m[2], int) and m[2] >= 1
+                        for m in modes)
+        if not shootable:
+            return "无可射击模式"
+    return None
+
+
 class Database:
     def __init__(self):
         self.by_id = {}        # id -> obj
         self.by_abstract = {}  # abstract -> obj
         self.src_of = {}       # id -> 来源（"core" 或 mod 名）
+        self.paths_of = {}     # id -> 定义所在文件的列表（判断要不要排除时用）
         self.skipped = 0
 
     @staticmethod
@@ -102,9 +150,12 @@ class Database:
                 if not ids:
                     continue
                 for one in (ids if isinstance(ids, list) else [ids]):
-                    if isinstance(one, str) and one not in self.by_id:
+                    if not isinstance(one, str):
+                        continue
+                    if one not in self.by_id:
                         self.by_id[one] = o
                         self.src_of[one] = source
+                    self.paths_of.setdefault(one, []).append(fp)
 
     # ---- 继承解析 ----------------------------------------------------------
 
@@ -301,12 +352,18 @@ def main():
     print("中文翻译：%s" % ("已加载" if tr.ok else "未加载（将使用英文原名）"))
 
     # ---- 分类收集 ----------------------------------------------------------
+    # 游戏数据里有几类条目虽然不是枪械却带着 GUN 子类型，先滤掉再统计。
+    excluded = []          # (原因, id)
     guns, ammos, gunmods = [], [], []
     for oid, o in db.by_id.items():
         subs = subtypes_of(o)
         if o.get("abstract"):
             continue
         if "GUN" in subs:
+            why = exclude_reason(db, oid, o)
+            if why:
+                excluded.append((why, oid))
+                continue
             guns.append(oid)
         elif "AMMO" in subs:
             ammos.append(oid)
@@ -314,6 +371,13 @@ def main():
             gunmods.append(oid)
 
     print("  枪械 %d / 弹药 %d / 配件 %d" % (len(guns), len(ammos), len(gunmods)))
+    if excluded:
+        by_why = {}
+        for why, oid in excluded:
+            by_why.setdefault(why, []).append(oid)
+        parts = ["%s %d" % (k, len(v)) for k, v in sorted(by_why.items(),
+                                                          key=lambda x: -len(x[1]))]
+        print("  排除非枪械条目 %d 条（%s）" % (len(excluded), "、".join(parts)))
 
     os.makedirs(args.out, exist_ok=True)
 

@@ -52,7 +52,7 @@ git show 27939e29b8b4ddc081490d9f51de59a459c88df6:src/item.cpp | grep -n -A10 "D
 
 | 层 | 文件 | 职责 |
 |---|---|---|
-| **数据层** | `gun_data.h/.cpp` + `generated/` | 结构体、常量、401 把枪 / 730 弹药 / 170 配件的数值 |
+| **数据层** | `gun_data.h/.cpp` + `generated/` | 结构体、常量、332 把枪 / 730 弹药 / 170 配件的数值 |
 | **计算层** | `gunlab_math.h/.cpp` | **全部公式，纯函数，没有任何输入输出** |
 | **界面层** | `src/gui/main_gui.cpp` | 排版与交互 |
 
@@ -297,8 +297,36 @@ python scripts/gen_gun_data.py --game "C:\Users\34068\Project\Cataclysm\CDDA"
 python scripts/gen_gun_data.py --game "<路径>" --mods Aftershock,Xedra_Evolved
 ```
 
-产出 401 把枪 / 730 种弹药 / 170 个配件。脚本会硬排除 `TEST_DATA`
+产出 332 把枪 / 730 种弹药 / 170 个配件。脚本会硬排除 `TEST_DATA`
 和 `Generic_Guns`（后者是互斥的全面转换 mod）。
+
+### 哪些条目被排除，以及为什么
+
+游戏数据里有一批条目带着 `GUN` 子类型，但**不是玩家能装备的枪械**。
+本项目只考虑枪械，所以生成器把它们滤掉了（2026-09-11 加的，
+401 条里滤掉 69 条）。判据用**游戏自己的标志和目录位置**，不硬编码 id：
+
+| 判据 | 条数 | 是什么 |
+|---|---:|---|
+| 目录 `obsoletion_and_migration_*` | 18 | 已从游戏删除、只为老存档留着的定义（PPSh-41 / Saiga-410 / American-180 / RM20…）。不在任何刷新表里 |
+| 目录 `monster_special_attacks` | 15 | 怪物特殊攻击的数值模板（acid dart gun / mi-go bio-gun…），带 `PSEUDO` + `NO_SALVAGE` |
+| 标志 `PRIMITIVE_RANGED_WEAPON` | 27 | 弓、弩、投石索。★ **光按技能滤不掉** —— 有些弩在游戏里归在 rifle/pistol 技能下（crossbow / hand_crossbow / bullet_crossbow…） |
+| 标志 `BIONIC_WEAPON` | 4 | 义体武器 |
+| 标志 `PSEUDO` | 4 | 只作数值模板、拿不到的伪物品 |
+| 无可射击模式 | 1 | 「可拆卸反曲弓（折叠）」，模式是 `[ "DEFAULT", "disassembled", 0, [ "MELEE" ] ]` —— 发数 0，收纳状态只能近战 |
+
+> 最后一条值得记：那个折叠弓**没有** `PRIMITIVE_RANGED_WEAPON`（展开状态才有），
+> 所以靠标志漏掉了，得靠「发数 ≥ 1」这个更本质的判据兜住。
+
+**还剩一批边界条目没清**（约 18 条）：矛枪 4、激光/电磁/EMP 7、喷火器与
+喷射器 4、外星等离子 2、BB 气枪 1。它们游戏里都算 `GUN`，散布/后坐/瞄准的
+算法对它们一样适用，所以留着能算出有意义的值 —— 但如果要严格「只留实弹
+枪械」，这些也得走。要清的话没有现成标志，得按弹药类型（`fishspear` /
+`battery` 之类）写规则。
+
+**`reload_and_shoot` 这个字段现在恒为 false** —— 有它的 22 把全被滤掉了
+（都是弓弩）。`fire_burst()` 里那个分支保留着（忠实复刻游戏），但目前跑不到。
+以后加 mod 带进弓弩的话才会重新有意义。
 
 ### 生成器里几个非显然的规则
 
@@ -350,23 +378,26 @@ python scripts/gen_gun_data.py --game "<路径>" --mods Aftershock,Xedra_Evolved
 > | gun | marksmanship | **枪法** |
 > | throw | throwing | **投掷** |
 >
-> 枪械实际用到的技能只有下面 7 种（**不含 `gun`** —— 那是「枪法」，
-> 是散布计算里的副技能，没有哪把枪的主技能是它）：
+> 过滤之后，枪械实际用到的技能只剩下面 5 种（**不含 `gun`** —— 那是「枪法」，
+> 是散布计算里的副技能，没有哪把枪的主技能是它。也不含 `archery` / `throw`——
+> 弓弩投掷已经被滤掉了，但 `zh::skill()` 里保留着这两条映射，加 mod 时会用到）：
 >
 > | 技能 | 把数 |
 > |---|---|
-> | rifle 步枪 | 161 |
-> | pistol 手枪 | 120 |
-> | shotgun 霰弹枪 | 49 |
-> | smg 冲锋枪 | 25 |
-> | launcher 重武器 | 24 |
-> | archery 弓术 | 17 |
-> | throw 投掷 | 5 |
-> | **合计** | **401** |
+> | rifle 步枪 | 140 |
+> | pistol 手枪 | 105 |
+> | shotgun 霰弹枪 | 41 |
+> | smg 冲锋枪 | 23 |
+> | launcher 重武器 | 23 |
+> | **合计** | **332** |
 >
-> ⚠️ 这几个数是图形版启动时统计出来的。**别用正则去数 `gen_guns.cpp`** ——
-> 名字里有转义引号的行（比如 `AR \"手枪\"`）会让 `"[^"]*"` 这类模式失配，
-> 数出来偏小（我一开始数成 146/105/46，少了 33 把）。
+> 数这个用 `python scripts/stats_guns.py`（只读，按位置解析 `gen_guns.cpp`）。
+>
+> ⚠️ **别随手写正则去数 `gen_guns.cpp`** —— 踩过两次：
+>   - 名字里有转义引号的行（`AR \"手枪\"`）会让 `"[^"]*"` 失配，数出来偏小；
+>   - id 里有大写和连字符（`AT4` / `civilian_AR-15` / `ksg-25`），
+>     `[a-z0-9_]+` 这类模式会漏掉 10 条。
+> 要数就用 `stats_guns.py`，它是按字段位置解析的。
 
 ---
 

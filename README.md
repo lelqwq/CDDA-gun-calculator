@@ -4,7 +4,9 @@
 源码，代码注释里标了出处（`文件:行号`）。
 
 **图形界面**（SDL3 + ImGui），`scripts\build_gui.bat` 一键构建。
-**数据规模**：401 把枪 / 730 种弹药 / 170 个配件，由脚本从游戏数据生成。
+**数据规模**：332 把枪 / 730 种弹药 / 170 个配件，由脚本从游戏数据生成。
+（游戏数据里带 `GUN` 子类型但其实不是枪械的条目已滤掉 —— 弓弩投石索、
+已废弃条目、怪物攻击模板等，共 69 条。详见 `CLAUDE.md`。）
 
 ---
 
@@ -125,13 +127,14 @@ gunlab/
 │   ├── gunlab_math.h/.cpp     ★   全部公式（纯函数，无 IO）     │ 静态库
 │   ├── zh_cn.h                    全部中文文本                 │
 │   └── generated/                 自动生成，勿手工编辑          ┘
-│       ├── gen_guns.cpp           401 把枪
+│       ├── gen_guns.cpp           332 把枪
 │       ├── gen_ammo.cpp           730 种弹药
 │       └── gen_gunmods.cpp        170 个配件
 │   └── gui/main_gui.cpp           图形界面（SDL3 + ImGui）
 ├── third_party/imgui/             从游戏源码里拷来的 ImGui
 ├── scripts/
 │   ├── gen_gun_data.py            ★ 数据生成器
+│   ├── stats_guns.py              看一眼生成的数据（技能分布 / 连发数…）
 │   ├── build_gui.bat              一键构建
 │   ├── copy_gui_deps.ps1          把 MinGW 运行库拷到 exe 旁边
 │   ├── screenshot_gui.ps1         启动 + 截图（改界面时用来自查）
