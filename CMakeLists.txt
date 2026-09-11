@@ -4,7 +4,8 @@
 #  项目只剩图形界面版（SDL3 + ImGui），用 scripts\build_gui.bat 一键构建。
 #
 #  ★ 必须用 MinGW，不能用 MSVC：机器上唯一的 SDL3 是 msys64 的 MinGW 版，
-#    MSVC 链不了它。命令行版删掉之后，MSVC 就彻底用不上了。
+#    MSVC 链不了它。（命令行版删掉之后 MSVC 就彻底用不上了，所以下面
+#    已经没有 if(MSVC) 分支 —— 用 MSVC 生成器会直接在这里 FATAL_ERROR。）
 # =============================================================================
 
 cmake_minimum_required(VERSION 3.16)
@@ -15,22 +16,18 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 # ---- 编译选项 ---------------------------------------------------------------
-if(MSVC)
-    # /utf-8 是必须的：源码是 UTF-8，但 MSVC 默认按系统代码页（简体中文是 936）
-    # 解读，会把中文字符串字面量解坏，导致一堆假语法错误。
-    add_compile_options(/utf-8 /W4)
-else()
-    add_compile_options(-Wall -Wextra)
+# 只支持 MinGW（理由见文件头）。原来这里还有 MSVC 分支（/utf-8 /W4），
+# 随命令行版一起删了 —— MSVC 现在连 GUI 都编不了，留着是死代码。
+add_compile_options(-Wall -Wextra)
 
-    # MinGW 下静态链接运行库，否则 exe 需要 libgcc_s_seh-1.dll / libstdc++-6.dll，
-    # 直接双击运行时这些 DLL 不在 PATH 上，会报「找不到 xxx.dll」。
-    if(MINGW)
-        add_link_options(-static -static-libgcc -static-libstdc++)
-    endif()
+# 静态链接运行库，否则 exe 需要 libgcc_s_seh-1.dll / libstdc++-6.dll，
+# 直接双击运行时这些 DLL 不在 PATH 上，会报「找不到 xxx.dll」。
+if(MINGW)
+    add_link_options(-static -static-libgcc -static-libstdc++)
 endif()
 
 # ---- 核心库 -----------------------------------------------------------------
-# 数据 + 公式，不含任何输入输出。命令行版与图形版共用这一层。
+# 数据 + 公式，不含任何输入输出。
 add_library(gunlab_core STATIC
     src/gun_data.cpp
     src/gunlab_math.cpp
@@ -59,11 +56,7 @@ if(SDL3_FOUND)
     target_link_libraries(imgui PUBLIC SDL3::SDL3)
 
     # 第三方代码，关掉警告
-    if(MSVC)
-        target_compile_options(imgui PRIVATE /w)
-    else()
-        target_compile_options(imgui PRIVATE -w)
-    endif()
+    target_compile_options(imgui PRIVATE -w)
 
     add_executable(gunlab_gui src/gui/main_gui.cpp)
     target_link_libraries(gunlab_gui PRIVATE gunlab_core imgui)
