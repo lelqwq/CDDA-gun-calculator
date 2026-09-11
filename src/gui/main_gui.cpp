@@ -138,8 +138,12 @@ struct DetailCache {
     double    accuracy_limit = 0.0;
     double    added_recoil   = 0.0;
 
-    // 瞄准收益曲线：curve[t] = 第 t 回合的 50%好击距离
-    std::vector<int> curve;
+    // 逐回合的两条曲线，下标都是「第 t 回合」：
+    //   curve[t]        = 这个瞄准误差能打到多远（50%好击距离，格）
+    //   recoil_curve[t] = 回合开始时的瞄准误差
+    // 两条曲线出自同一趟循环，所以一一对应。
+    std::vector<double> curve;
+    std::vector<double> recoil_curve;
 };
 
 constexpr int    PROB_N      = 200000;
@@ -217,6 +221,21 @@ double nice_step( double range, int target_ticks )
                       : 10.0;
     return pick * mag;
 }
+
+// 折线图上的参考横线（比如三个瞄准档位的阈值）
+struct ChartMark {
+    double      y;
+    const char *label;
+};
+
+// 定义在下面「瞄准档位实例」附近。这里前置声明是因为瞄准时间线的图要用它，
+// 而那个函数定义在更前面。
+void draw_line_chart( const char *id,
+                      const std::vector<double> &data,
+                      const char *y_label,
+                      const char *y_fmt,
+                      const char *tip_fmt,
+                      const std::vector<ChartMark> &marks = {} );
 
 // 灰色小字说明，自动换行
 void note( const char *fmt, ... )
@@ -494,9 +513,10 @@ void compute_detail( const Gun &g, const Ammo *ammo )
             range_with_even_chance_of_good_hit( g_detail.fixed_disp + th[i] );
     }
 
-    // ---- 瞄准收益曲线 -------------------------------------------------------
-    // 逐回合推进瞄准，记录每一回合能打到多远。与命令行版 print_range_curve
-    // 逐行对应（含 ctx 的取法）—— 两边必须给出一条一样的曲线。
+    // ---- 逐回合推进瞄准 -----------------------------------------------------
+    // 一趟循环同时产出两条曲线：这一回合能打多远，以及回合开始时的瞄准误差。
+    // 与命令行版 print_range_curve 逐行对应（含 ctx 的取法）—— 两边必须
+    // 给出一条一样的曲线。
     {
         AimContext cctx;
         cctx.len_factor = 1.0;
@@ -506,12 +526,14 @@ void compute_detail( const Gun &g, const Ammo *ammo )
         const int TURN = 100;     // 一回合的行动点
         const int MAXT = 20;      // 最多算 20 回合
         g_detail.curve.clear();
+        g_detail.recoil_curve.clear();
 
         double recoil = MAX_RECOIL;
         int    flat   = 0;
         for( int t = 0; t <= MAXT; t++ ) {
             g_detail.curve.push_back(
                 range_with_even_chance_of_good_hit( g_detail.fixed_disp + recoil ) );
+            g_detail.recoil_curve.push_back( recoil );
 
             const size_t n = g_detail.curve.size();
             if( t > 0 && g_detail.curve[n - 1] == g_detail.curve[n - 2] ) {
@@ -990,21 +1012,36 @@ void draw_aim_timeline( const DetailCache &d )
     kv( zh::g::ONE_TURN, "%.0f", d.aim.recoil_after_1_turn );
     note( zh::g::THRESHOLDS, (int)d.aim.regular_th, (int)d.aim.careful_th,
           (int)d.aim.precise_th );
+
+    // 上面那些数字画成图就是这条曲线：纵轴是回合开始时的瞄准误差，
+    // 从 3000 一路降到「瞄准精度上限」就平了。三条橙色横线是档位阈值，
+    // 曲线穿过哪条，就说明那一回合刚好压进该档位。
+    ImGui::Spacing();
+    note( "%s", zh::g::TIMELINE_HINT2 );
+    const std::vector<ChartMark> marks = {
+        { d.aim.regular_th, zh::AIM_LEVEL_1 },
+        { d.aim.careful_th, zh::AIM_LEVEL_2 },
+        { d.aim.precise_th, zh::AIM_LEVEL_3 },
+    };
+    draw_line_chart( "##recoil_curve", d.recoil_curve, zh::g::AXIS_RECOIL,
+                     "%.0f", zh::g::RECOIL_TIP, marks );
 }
 
-// 瞄准收益曲线 —— 用 ImDrawList 手绘
+// 通用折线图：X 轴固定是「瞄准回合」，Y 轴由调用方给名字和格式。
+// data[i] = 第 i 回合的值。marks 是可选的参考横线。
 //
-// 为什么不用 ImPlot：本机取不到（没网络，游戏源码的 third-party 里也没有），
-// 而为了一个折线图去引第三方库不划算。坐标轴、网格、折线、填充、悬停提示
-// 手写下来一共百来行，还省掉一个新依赖的构建麻烦。
-void draw_range_curve( const DetailCache &d )
+// 自己用 ImDrawList 画，没引 ImPlot —— 见文件头「图表是手绘的」那段。
+//
+// 坐标轴、网格、折线、填充、刻度取整、参考线、悬停提示都在这一个函数里，
+// 两个图（瞄准收益曲线、瞄准时间线的误差曲线）共用。
+void draw_line_chart( const char *id,
+                      const std::vector<double> &data,
+                      const char *y_label,
+                      const char *y_fmt,
+                      const char *tip_fmt,
+                      const std::vector<ChartMark> &marks )   // 默认实参见前置声明
 {
-    if( !ImGui::CollapsingHeader( zh::g::SEC_CURVE, ImGuiTreeNodeFlags_DefaultOpen ) ) {
-        return;
-    }
-    note( "%s", zh::g::CURVE_HINT );
-
-    const int N = (int)d.curve.size();
+    const int N = (int)data.size();
     if( N < 2 ) {
         return;
     }
@@ -1013,7 +1050,7 @@ void draw_range_curve( const DetailCache &d )
     const float  H      = 280.0f;
     const ImVec2 origin = ImGui::GetCursorScreenPos();
 
-    ImGui::InvisibleButton( "##curve", ImVec2( W, H ) );
+    ImGui::InvisibleButton( id, ImVec2( W, H ) );
     const bool   hovered = ImGui::IsItemHovered();
     const ImVec2 mouse   = ImGui::GetIO().MousePos;
 
@@ -1025,9 +1062,13 @@ void draw_range_curve( const DetailCache &d )
     const ImVec2 a( origin.x + L,     origin.y + T );
     const ImVec2 b( origin.x + W - R, origin.y + H - B );
 
-    int maxY = 1;
-    for( int v : d.curve ) {
+    // Y 轴范围要把参考线也框进来，否则阈值线会画到图外面
+    double maxY = 1.0;
+    for( double v : data ) {
         maxY = std::max( maxY, v );
+    }
+    for( const ChartMark &m : marks ) {
+        maxY = std::max( maxY, m.y );
     }
     const double step = nice_step( maxY, 5 );
     const double top  = std::max( step, std::ceil( maxY / step ) * step );
@@ -1046,6 +1087,7 @@ void draw_range_curve( const DetailCache &d )
     const ImU32 col_line = IM_COL32( 100, 180, 255, 255 );
     const ImU32 col_fill = IM_COL32( 100, 180, 255, 40 );
     const ImU32 col_dot  = IM_COL32( 170, 215, 255, 255 );
+    const ImU32 col_mark = IM_COL32( 235, 170, 80, 220 );
 
     dl->AddRectFilled( a, b, col_bg );
 
@@ -1053,7 +1095,7 @@ void draw_range_curve( const DetailCache &d )
     for( double v = 0.0; v <= top + 1e-9; v += step ) {
         const float y = py( v );
         dl->AddLine( ImVec2( a.x, y ), ImVec2( b.x, y ), col_grid );
-        const std::string lab = fmt_str( "%d", (int)v );
+        const std::string lab = fmt_str( y_fmt, v );
         const ImVec2 ts = ImGui::CalcTextSize( lab.c_str() );
         dl->AddText( ImVec2( a.x - 8.0f - ts.x, y - ts.y * 0.5f ), col_text, lab.c_str() );
     }
@@ -1076,7 +1118,7 @@ void draw_range_curve( const DetailCache &d )
     std::vector<ImVec2> pts;
     pts.reserve( N );
     for( int t = 0; t < N; t++ ) {
-        pts.emplace_back( px( t ), py( d.curve[t] ) );
+        pts.emplace_back( px( t ), py( data[t] ) );
     }
     for( int t = 0; t + 1 < N; t++ ) {
         dl->AddQuadFilled( pts[t], pts[t + 1],
@@ -1085,6 +1127,46 @@ void draw_range_curve( const DetailCache &d )
     dl->AddPolyline( pts.data(), N, col_line, ImDrawFlags_None, 2.0f );
     for( const ImVec2 &p : pts ) {
         dl->AddCircleFilled( p, 3.0f, col_dot );
+    }
+
+    // 参考横线。标签不画在线上 —— 阈值通常远小于纵轴上限（比如 348 / 127 / 54
+    // 对 3000），三条线全挤在最下面一截，各自带标签会叠成一团。改成右上角的
+    // 图例：曲线从左上降到右下，右上角一定是空的，压不到数据。
+    for( const ChartMark &m : marks ) {
+        const float y = py( m.y );
+        if( y < a.y - 1.0f || y > b.y + 1.0f ) {
+            continue;
+        }
+        dl->AddLine( ImVec2( a.x, y ), ImVec2( b.x, y ), col_mark, 1.5f );
+    }
+
+    if( !marks.empty() ) {
+        // 图例里带数值，省得再去对上面那行「档位阈值：…」的文字。
+        // ★ 用 (int) 截断而不是 %.0f —— 阈值是小数（比如 348.6），
+        //   四舍五入会显示成 349，和上面那行（用截断）差一个数，看着像 bug。
+        std::vector<std::string> entries;
+        float lw = 0.0f;
+        for( const ChartMark &m : marks ) {
+            entries.push_back( fmt_str( zh::g::LEGEND_FMT, m.label, (int)m.y ) );
+            lw = std::max( lw, ImGui::CalcTextSize( entries.back().c_str() ).x );
+        }
+
+        const float lineH = ImGui::GetTextLineHeight();
+        const float pad   = 6.0f, swatch = 16.0f;
+        const ImVec2 p0( b.x - lw - swatch - pad * 3.0f, a.y + pad );
+        const ImVec2 p1( b.x - pad, p0.y + lineH * (float)entries.size() + pad * 2.0f );
+
+        dl->AddRectFilled( p0, p1, IM_COL32( 16, 16, 20, 215 ), 3.0f );
+        dl->AddRect( p0, p1, col_grid, 3.0f );
+
+        float ty = p0.y + pad;
+        for( const std::string &e : entries ) {
+            const float cy = ty + lineH * 0.5f;
+            dl->AddLine( ImVec2( p0.x + pad, cy ), ImVec2( p0.x + pad + swatch, cy ),
+                         col_mark, 2.0f );
+            dl->AddText( ImVec2( p0.x + pad + swatch + pad, ty ), col_mark, e.c_str() );
+            ty += lineH;
+        }
     }
 
     // 悬停：竖线 + 该回合的数值
@@ -1098,18 +1180,28 @@ void draw_range_curve( const DetailCache &d )
         dl->AddCircleFilled( p, 5.0f, col_line );
 
         ImGui::BeginTooltip();
-        ImGui::Text( zh::g::CURVE_TIP, t, d.curve[t] );
+        ImGui::TextUnformatted( fmt_str( tip_fmt, t, data[t] ).c_str() );
         ImGui::EndTooltip();
     }
 
     // 轴名。这两个是字面量，直接画 —— 别丢进 printf，里面那个 % 会被当格式符。
     // Y 轴名放绘图区左上角（竖排太麻烦），X 轴名居中放在刻度下面
-    dl->AddText( ImVec2( a.x, origin.y + 6.0f ), col_text, zh::g::AXIS_RANGE );
+    dl->AddText( ImVec2( a.x, origin.y + 6.0f ), col_text, y_label );
     {
         const ImVec2 ts = ImGui::CalcTextSize( zh::g::AXIS_TURN );
         dl->AddText( ImVec2( ( a.x + b.x ) * 0.5f - ts.x * 0.5f, b.y + 28.0f ),
                      col_text, zh::g::AXIS_TURN );
     }
+}
+
+// 瞄准收益曲线：横轴 = 瞄准回合，纵轴 = 50%好击距离
+void draw_range_curve( const DetailCache &d )
+{
+    if( !ImGui::CollapsingHeader( zh::g::SEC_CURVE, ImGuiTreeNodeFlags_DefaultOpen ) ) {
+        return;
+    }
+    note( "%s", zh::g::CURVE_HINT );
+    draw_line_chart( "##range_curve", d.curve, zh::g::AXIS_RANGE, "%.0f", zh::g::CURVE_TIP );
 }
 
 // 瞄准档位实例

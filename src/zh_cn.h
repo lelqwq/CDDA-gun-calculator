@@ -412,7 +412,14 @@ inline const char *CURVE_HINT   =
     "横轴 = 瞄准回合（1 回合 = 100 行动点），纵轴 = 50%好击距离。曲线到顶后就白瞄了 —— 瞄准误差压到精度下限便再也降不下去。鼠标移到图上可看具体数值";
 inline const char *AXIS_TURN    = "瞄准回合";
 inline const char *AXIS_RANGE   = "50%好击距离（格）";
-inline const char *CURVE_TIP    = "%d 回合\n%d 格";
+inline const char *CURVE_TIP    = "%d 回合\n%.0f 格";
+
+// 瞄准时间线里的那张图：纵轴换成瞄准误差本身
+inline const char *AXIS_RECOIL   = "瞄准误差";
+inline const char *LEGEND_FMT    = "%s %d";     // 图例里的一条：档位名 + 阈值（截断，与上方「档位阈值」那行一致）
+inline const char *RECOIL_TIP    = "%d 回合\n瞄准误差 %.0f";
+inline const char *TIMELINE_HINT2 =
+    "回合开始时的瞄准误差，画成图就是从 3000 一路降下来。橙色横线是三个档位的判定阈值 —— 曲线穿过哪条，就说明那一回合刚好压进该档位；压到最下面那条平了就说明到极限了";
 inline const char *NO_MODS      = "（未安装任何配件）";
 
 // 配件安装 / 移除
