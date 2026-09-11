@@ -32,8 +32,15 @@ echo [2/3] Building...
 cmake --build build-gui
 if errorlevel 1 goto fail
 
-echo [3/3] Copying SDL3.dll next to the exe...
-copy /y "%MINGW%\bin\SDL3.dll" build-gui\ >nul
+echo [3/3] Copying MinGW runtime DLLs next to the exe...
+REM  -static only covers our own exe. SDL3.dll is a msys64 shared library and
+REM  still drags libiconv-2.dll and friends behind it -- without those the exe
+REM  dies with "libiconv-2.dll not found". The script walks the PE import tables
+REM  recursively, so it keeps working when msys64 updates SDL3's dependencies.
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0copy_gui_deps.ps1" ^
+           -Exe "%~dp0..\build-gui\gunlab_gui.exe" -Dest "%~dp0..\build-gui" ^
+           -Mingw "%MINGW%"
+if errorlevel 1 goto fail
 
 echo.
 echo ============ BUILD OK ============
