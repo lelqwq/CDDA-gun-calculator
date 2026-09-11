@@ -161,6 +161,21 @@ powershell -File scripts\screenshot_gui.ps1 -AppArg "AKM" -Out shot.png
 > `PrintWindow` 只截到左上角 —— **看起来像界面右边被切了，其实界面好得很**。
 > 脚本里已经处理了，换别的截图方式时要记得。
 
+### 图表是手绘的，没引 ImPlot
+
+瞄准收益曲线用 ImGui 自带的 `ImDrawList` 画（`draw_range_curve()`）——
+坐标轴、网格、折线、填充、刻度取整、鼠标悬停提示全部手写，约 150 行。
+
+原因：本机取不到 ImPlot（没有网络，游戏源码的 `third-party/` 里只有
+imgui / imtui / fmt / flatbuffers 等，没有 implot），而为了一个折线图
+去引第三方库不划算。
+
+**真要换成 ImPlot** 的话：把 `implot.h` / `implot.cpp` / `implot_internal.h` /
+`implot_items.cpp` 放进 `third_party/implot/`，加进 CMakeLists 里 `imgui`
+那个静态库的源文件列表，然后 `#include "implot.h"`，把
+`draw_range_curve()` 换成 `ImPlot::BeginPlot` 一类的调用即可 ——
+曲线数据 `DetailCache::curve` 不用动。
+
 ---
 
 ## 三、数据生成
