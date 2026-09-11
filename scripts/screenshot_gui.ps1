@@ -61,9 +61,15 @@ public class Cap {
 "@
 
 # ---- 2. 启动 ----------------------------------------------------------------
-# 先收拾掉上一次可能没关干净的进程，否则新进程起不来（单实例不会冲突，
-# 但残留窗口会干扰按进程找窗口）
-Get-Process gunlab_gui -ErrorAction SilentlyContinue | Stop-Process -Force
+# 先收拾掉上一次可能没关干净的进程，否则残留窗口会干扰按进程找窗口。
+#
+# ★ 杀完必须等它真的退出再启动新的。不等的话，旧窗口还没销毁，
+#   新进程的 MainWindowHandle 有可能拿到旧窗口 —— 结果是截出来一张
+#   上一版程序的图，看起来像「代码没生效」。这个假象真的骗到过我一次。
+Get-Process gunlab_gui -ErrorAction SilentlyContinue | ForEach-Object {
+    $_ | Stop-Process -Force
+    [void]$_.WaitForExit( 5000 )
+}
 
 if ($AppArg -ne "") {
     $p = Start-Process -FilePath $Exe -ArgumentList $AppArg -PassThru `
