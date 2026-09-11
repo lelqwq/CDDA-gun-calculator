@@ -527,6 +527,76 @@ AimResult simulate_aim(const Gun& g, const Character& c, AimContext ctx,
     return res;
 }
 
+// ---- 连射 -------------------------------------------------------------------
+//  逐行对应 0.I src/ranged.cpp:1140-1237 的 burst 循环与收尾。
+//  改这里之前先去那边确认一遍 —— 尤其「每发只立即加 (1-吸收)」和
+//  「被吸收的部分延迟到 burst 末」这两条，很容易写成每发全额累加。
+
+BurstResult fire_burst(const Gun& g, const Character& c, const Ammo* ammo,
+                       double start_recoil, int qty)
+{
+    BurstResult res;
+    if (qty < 1) qty = 1;                      // 游戏保证至少 1 发
+
+    const double absorb = recoil_absorb(c.skill_level);
+    const int    q      = gun_recoil(g, c.str, ammo ? ammo->recoil : 0.0);
+
+    double recoil = start_recoil;
+    // ★ delay 在游戏里是 int（ranged.cpp:1067），每步累加会截断小数。
+    //   量级很小，但既然是复刻就照抄，别自作主张改成 double。
+    int delay = 0;
+
+    res.shot_recoil.reserve(qty);
+    for (int i = 0; i < qty; i++) {
+        // 本发的命中判定用的是**开火前**的 recoil（ranged.cpp:1221），
+        // 所以先记录，再累加。
+        res.shot_recoil.push_back(recoil);
+        delay  += q * absorb;
+        recoil += 5.0 * (q * (1.0 - absorb));
+    }
+
+    if (g.reload_and_shoot) {
+        // 弓弩/投石索：打完直接回满，攒的 delay 也一并丢弃
+        recoil = MAX_RECOIL;
+    } else {
+        recoil += delay;
+        recoil = std::min(MAX_RECOIL, recoil);
+    }
+    res.recoil_after = recoil;
+    return res;
+}
+
+double aim_for_turns(const Gun& g, const Character& c, double recoil,
+                     int turns, const AimContext& ctx)
+{
+    const int TURN_MOVES = 100;                // 一回合的行动点
+    for (int t = 0; t < turns; t++) {
+        for (int i = 0; i < TURN_MOVES && recoil > ctx.limit; i++) {
+            const double amt = aim_per_move(g, c, recoil, ctx);
+            if (amt <= 0) return recoil;       // 压不动了，提前收工
+            recoil = std::max(ctx.limit, recoil - amt);
+        }
+    }
+    return recoil;
+}
+
+double sustained_fire_recoil(const Gun& g, const Character& c, const Ammo* ammo,
+                             int qty, int aim_turns, const AimContext& ctx)
+{
+    // 第一轮从满误差起步（战斗刚开始，recoil 初值就是 MAX_RECOIL）
+    double r = aim_for_turns(g, c, MAX_RECOIL, aim_turns, ctx);
+
+    // 之后反复「开火 → 重新瞄准」。一定收敛：开火把误差顶上去、瞄准按比例
+    // 压回来，是个压缩映射；顶到 MAX_RECOIL 被钳位时更是不动点。
+    for (int i = 0; i < 500; i++) {
+        const double after = fire_burst(g, c, ammo, r, qty).recoil_after;
+        const double next  = aim_for_turns(g, c, after, aim_turns, ctx);
+        if (std::fabs(next - r) < 0.5) return next;
+        r = next;
+    }
+    return r;                                  // 500 轮还没收敛就返回当前值
+}
+
 // ---- 搜索 -------------------------------------------------------------------
 // 大小写不敏感的子串匹配（对中文无影响，对英文型号名有用）
 bool icontains(const std::string& hay, const std::string& needle)

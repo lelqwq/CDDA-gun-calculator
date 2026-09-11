@@ -80,6 +80,42 @@ double missed_by(double total_dispersion, double range_tiles, double target_size
 double roll_dispersion(const Gun& g, const Character& c, const Ammo* ammo, double recoil, std::mt19937& rng);
 int tier_index(double missed_by);
 AimResult simulate_aim(const Gun& g, const Character& c, AimContext ctx, int turn_moves = 100, int max_moves = 5000);
+
+// ---- 连射 --------------------------------------------------------------------
+//  游戏里半自动和全自动**唯一**的差别就是一次扣扳机打几发（mode 的 qty）——
+//  都是同一个 fire_gun 循环，瞄准和后坐算法完全共用。0.I ranged.cpp:1067
+
+// 一次开火（打完一个 burst）的结果
+struct BurstResult {
+    std::vector<double> shot_recoil;   // 每发**开火前**的瞄准误差，长度 = 实际发数
+    double recoil_after = 0.0;         // burst 结束后的瞄准误差（已钳到 MAX_RECOIL）
+};
+
+// 从 start_recoil 起打出 qty 发。逐行对应 0.I ranged.cpp:1140-1237：
+//   每发：delay += gun_recoil × 吸收        （被吸收的部分推迟到 burst 末结算）
+//         recoil += 5.0 × gun_recoil × (1-吸收)
+//   burst 末：RELOAD_AND_SHOOT 的枪直接 recoil = MAX_RECOIL，
+//             否则 recoil += delay 再钳到 MAX_RECOIL
+BurstResult fire_burst(const Gun& g, const Character& c, const Ammo* ammo,
+                       double start_recoil, int qty);
+
+// 从 recoil 起瞄准 turns 个回合（每回合 100 行动点），返回压低后的瞄准误差。
+// 压到 ctx.limit（瞄准精度上限）就压不动了。
+//
+// ★ ctx.limit 和 ctx.vol_factor 要调用方自己填 —— 这里不代劳，因为
+//   simulate_aim() 会填但本函数不会。用 most_accurate_aiming_method_limit()
+//   和 aim_factor_from_volume() 算，跟别处保持一致。
+double aim_for_turns(const Gun& g, const Character& c, double recoil,
+                     int turns, const AimContext& ctx);
+
+// 「两发之间瞄 aim_turns 回合」的**稳态**：反复「开火 → 重新瞄准」直到收敛，
+// 返回稳定后每次开火瞬间的瞄准误差。
+//
+// 为什么不直接算第二发：稳态才是长期这么打的真实水平，而第二发只是一次
+// 过渡（战斗开始时 recoil 初值就是满的 MAX_RECOIL，要几轮才落下来）。
+// 两者在「格」这个显示精度上通常看不出差别，但稳态的定义更干净。
+double sustained_fire_recoil(const Gun& g, const Character& c, const Ammo* ammo,
+                             int qty, int aim_turns, const AimContext& ctx);
 bool icontains(const std::string& hay, const std::string& needle);
 std::vector<std::string> gun_search_keys(const Gun& g);
 std::vector<int> search_guns(const std::string& kw);
