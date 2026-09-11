@@ -618,8 +618,10 @@ void compute_detail( const Gun &g, const Ammo *ammo )
     const double th[3] = { g_detail.aim.regular_th, g_detail.aim.careful_th,
                            g_detail.aim.precise_th };
     for( int i = 0; i < 3; i++ ) {
-        g_detail.aim_range[i] =
-            range_with_even_chance_of_good_hit( g_detail.fixed_disp + th[i] );
+        // 被去重掉的档位阈值是 -1，算出来没意义，直接置 0
+        g_detail.aim_range[i] = ( th[i] < 0.0 )
+            ? 0
+            : range_with_even_chance_of_good_hit( g_detail.fixed_disp + th[i] );
     }
 
     // 后面的曲线和连射计算都要用这个 ctx，算一次共用
@@ -1150,12 +1152,14 @@ void draw_aim_levels( const DetailCache &d )
         ImGui::TableSetupColumn( zh::g::COL_AIMTIME, ImGuiTableColumnFlags_WidthFixed, 140 );
         ImGui::TableHeadersRow();
 
-        const struct { const char *name; int rng, mv; } rows[] = {
-            { zh::AIM_LEVEL_1, d.aim_range[0], d.aim.moves_to_regular },
-            { zh::AIM_LEVEL_2, d.aim_range[1], d.aim.moves_to_careful },
-            { zh::AIM_LEVEL_3, d.aim_range[2], d.aim.moves_to_precise },
+        // 阈值被去重掉的档位不存在，不列那一行（高散布武器可能只剩一两档）
+        const struct { const char *name; int rng, mv; bool exists; } rows[] = {
+            { zh::AIM_LEVEL_1, d.aim_range[0], d.aim.moves_to_regular, true },
+            { zh::AIM_LEVEL_2, d.aim_range[1], d.aim.moves_to_careful, d.aim.has_careful },
+            { zh::AIM_LEVEL_3, d.aim_range[2], d.aim.moves_to_precise, d.aim.has_precise },
         };
         for( const auto &r : rows ) {
+            if( !r.exists ) continue;
             ImGui::TableNextRow();
             ImGui::TableNextColumn(); ImGui::TextUnformatted( r.name );
             ImGui::TableNextColumn();
@@ -1180,11 +1184,10 @@ void draw_aim_timeline( const DetailCache &d )
         return;
     }
     note( "%s", zh::g::TIMELINE_HINT2 );
-    const std::vector<ChartMark> marks = {
-        { d.aim.regular_th, zh::AIM_LEVEL_1 },
-        { d.aim.careful_th, zh::AIM_LEVEL_2 },
-        { d.aim.precise_th, zh::AIM_LEVEL_3 },
-    };
+    // 被去重掉的档位阈值是 -1，不画那条参考线
+    std::vector<ChartMark> marks = { { d.aim.regular_th, zh::AIM_LEVEL_1 } };
+    if( d.aim.has_careful ) { marks.push_back( { d.aim.careful_th, zh::AIM_LEVEL_2 } ); }
+    if( d.aim.has_precise ) { marks.push_back( { d.aim.precise_th, zh::AIM_LEVEL_3 } ); }
     // 刻度 7 格（0~3000 的步长取整成 500，网格细一倍），图也给高一些。
     //
     // ★ 三个档位阈值是 348 / 127 / 54，在 0~3000 的纵轴上只占底部 12%，
@@ -1591,24 +1594,25 @@ void draw_instance( const DetailCache &d )
         ImGui::TableSetupColumn( zh::g::COL_50RANGE, ImGuiTableColumnFlags_WidthFixed, 140 );
         ImGui::TableHeadersRow();
 
-        // 与命令行版一致：完全没瞄 = 最大后坐；另外三档 = 按瞄准进度插值
-        const double limit = d.accuracy_limit;
+        // 完全没瞄 = 最大后坐；另外三档直接用 simulate_aim 算好的阈值
+        // （那里已经照游戏做了 int 截断和去重，别再在这儿重算一遍公式）。
+        // 不存在的档位（阈值被去重掉的）不列。
         const struct { const char *name; double recoil; } rows[] = {
             { zh::AIM_LEVEL_0, MAX_RECOIL },
-            { zh::AIM_LEVEL_1, ( ( MAX_RECOIL - limit ) / 10.0 ) + limit },
-            { zh::AIM_LEVEL_2, ( ( MAX_RECOIL - limit ) / 40.0 ) + limit },
-            { zh::AIM_LEVEL_3, limit },
+            { zh::AIM_LEVEL_1, d.aim.regular_th },
+            { zh::AIM_LEVEL_2, d.aim.careful_th },
+            { zh::AIM_LEVEL_3, d.aim.precise_th },
         };
-        for( const auto &r : rows ) {
-            const double total = d.fixed_disp + r.recoil;
+        for( int i = 0; i < 4; i++ ) {
+            if( i == 2 && !d.aim.has_careful ) continue;
+            if( i == 3 && !d.aim.has_precise ) continue;
+            const double total = d.fixed_disp + rows[i].recoil;
             const int rng = range_with_even_chance_of_good_hit( total );
             ImGui::TableNextRow();
-            ImGui::TableNextColumn(); ImGui::TextUnformatted( r.name );
-            // ★ 一律用 (int) 截断，不用 %.0f。这些值都是小数（普通档阈值是
-            //   348.6、固定散布 299.5），四舍五入会显示成 349 / 300，和同屏
-            //   的图例（用截断）差一个数，看着像 bug。游戏自己也是
-            //   static_cast<int>（0.I ranged.cpp:2221）。
-            ImGui::TableNextColumn(); ImGui::Text( "%d", (int)r.recoil );
+            ImGui::TableNextColumn(); ImGui::TextUnformatted( rows[i].name );
+            // ★ 一律用 (int) 截断，不用 %.0f。固定散布这类值是小数（299.5），
+            //   四舍五入会显示成 300，和同屏别处（用截断）差一个数，看着像 bug。
+            ImGui::TableNextColumn(); ImGui::Text( "%d", (int)rows[i].recoil );
             ImGui::TableNextColumn(); ImGui::Text( "%d", (int)d.fixed_disp );
             ImGui::TableNextColumn(); ImGui::Text( "%d", (int)total );
             ImGui::TableNextColumn();

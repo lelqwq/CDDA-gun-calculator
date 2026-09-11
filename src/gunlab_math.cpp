@@ -500,21 +500,50 @@ AimResult simulate_aim(const Gun& g, const Character& c, AimContext ctx,
     ctx.vol_factor = aim_factor_from_volume(g, effective_volume(g));
     // ctx.len_factor 由调用方设置
 
+    // ---- 三个瞄准档位的阈值  ranged.cpp:2211 Character::get_aim_types() ----
+    // 把「瞄准精度上限 → MAX_RECOIL」这段按比例切：
+    //     普通档 = 上限 + (MAX_RECOIL − 上限) × 10%
+    //     仔细档 = 上限 + (MAX_RECOIL − 上限) × 2.5%
+    //     精准档 = 上限
+    // （游戏注释写的是「10%, 5%, 0%」，但代码是 /10 和 /40，以代码为准。）
+    //
+    // ★ 两个必须照抄的地方：
+    //   1. 阈值在游戏里是 **int**（aim_type::threshold），gun_engagement_moves
+    //      也收 int。用未截断的 double 比会让行动点数**偏小**，实测 332 把枪里
+    //      有 199 把的仔细档会差 1 点（127.65 → 127 就要多走一步）。
+    //   2. 重复的阈值会被**去掉** —— 高散布武器（上限接近 MAX_RECOIL）可能只剩
+    //      一两档。这时 has_careful / has_precise 为 false，界面要跳过那一行。
     const double sd = ctx.limit;
-    res.precise_th = sd;
-    res.careful_th = ((MAX_RECOIL - sd) / 40.0) + sd;
-    res.regular_th = ((MAX_RECOIL - sd) / 10.0) + sd;
+    std::vector<int> th = {
+        (int)( ( ( MAX_RECOIL - sd ) / 10.0 ) + sd ),
+        (int)( ( ( MAX_RECOIL - sd ) / 40.0 ) + sd ),
+        (int)sd,
+    };
+    th.erase( std::unique( th.begin(), th.end() ), th.end() );   // 与游戏同样按相邻去重
+
+    res.regular_th  = th[0];
+    res.has_careful = th.size() > 1;
+    res.has_precise = th.size() > 2;
+    res.careful_th  = res.has_careful ? th[1] : -1.0;
+    res.precise_th  = res.has_precise ? th[2] : -1.0;
+
+    // 瞄准的下限跟着「精准档」走（就是截断后的上限），不然压不到那个整数
+    const double floor_recoil = res.precise_th;
 
     double recoil = MAX_RECOIL;
     int moves = 0;
-    while (recoil > sd && moves < max_moves) {
+    while (recoil > floor_recoil && moves < max_moves) {
         const double amt = aim_per_move(g, c, recoil, ctx);
         if (amt <= 0) break;
-        recoil = std::max(sd, recoil - amt);
+        recoil = std::max(floor_recoil, recoil - amt);
         moves++;
         if (res.moves_to_regular < 0 && recoil <= res.regular_th) res.moves_to_regular = moves;
-        if (res.moves_to_careful < 0 && recoil <= res.careful_th) res.moves_to_careful = moves;
-        if (res.moves_to_precise < 0 && recoil <= res.precise_th) res.moves_to_precise = moves;
+        if (res.has_careful && res.moves_to_careful < 0 && recoil <= res.careful_th) {
+            res.moves_to_careful = moves;
+        }
+        if (res.has_precise && res.moves_to_precise < 0 && recoil <= res.precise_th) {
+            res.moves_to_precise = moves;
+        }
         if (moves == turn_moves) {
             res.recoil_after_1_turn = recoil;
             res.delta_1_turn        = MAX_RECOIL - recoil;

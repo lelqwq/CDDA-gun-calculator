@@ -34,12 +34,18 @@ struct AimContext {
     bool   visible      = true;
 };
 
-// 瞄准模拟的结果
+// 瞄准模拟的结果。
+//
+//  阈值都是**整数**（游戏里 aim_type::threshold 就是 int）—— 见 .cpp 里的说明。
+//  游戏会把重复的档位去掉，所以高散布武器可能只剩一两档：这时 has_careful /
+//  has_precise 为 false，对应的 th 是 -1，moves 也是 -1，**界面必须跳过那一行**。
 struct AimResult {
     int    moves_to_regular = -1;
     int    moves_to_careful = -1;
     int    moves_to_precise = -1;
     double regular_th = 0, careful_th = 0, precise_th = 0;
+    bool   has_careful = true;
+    bool   has_precise = true;
     double recoil_after_1_turn = 0;
     double delta_1_turn        = 0;
 };
