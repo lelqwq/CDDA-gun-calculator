@@ -83,6 +83,20 @@ struct Ammo {
     std::string source;
 };
 
+// 射击模式  islot_gun::modes  itype.h:892
+//
+//  游戏 JSON 里长这样： "modes": [ [ "DEFAULT", "semi-auto", 1 ], [ "AUTO", "auto", 4 ] ]
+//  数组第 4 个元素是可选的 flag（如 "NPC_AVOID"），本项目用不到，不存。
+//
+//  ★ DEFAULT / AUTO / BURST 这些 id **没有硬编码语义**，只是约定俗成的名字。
+//    半自动和全自动在代码里唯一的差别就是 qty —— 都是同一个 fire_gun 循环，
+//    瞄准和后坐算法完全共用（0.I ranged.cpp:1067 的 while( curshot != shots )）。
+struct GunMode {
+    std::string id;         // 逻辑键：DEFAULT / AUTO / BURST …（不翻译）
+    std::string name;       // 游戏里的显示名："semi-auto" / "auto" / "3 rd."
+    int         qty = 1;    // 一次扣扳机打几发
+};
+
 // 枪械  islot_gun
 struct Gun {
     std::string id;
@@ -102,6 +116,12 @@ struct Gun {
     double      barrel_length_mm = 0.0;   // 弹药伤害插值用
 
     bool        disable_sights = false;    // DISABLE_SIGHTS flag：只能用腰射
+
+    // RELOAD_AND_SHOOT（弓弩、投石索）：打完 recoil 直接回满 MAX_RECOIL，
+    // 不参与「连射累积」。0.I ranged.cpp:1225-1227
+    bool        reload_and_shoot = false;
+
+    std::vector<GunMode> modes;            // 射击模式，至少一个（DEFAULT）
 
     std::vector<std::string> ammo_types;   // 可用的口径（模块化枪械为空，口径来自配件）
     std::vector<std::string> mod_slots;    // valid_mod_locations 的槽位名
@@ -168,6 +188,8 @@ void add_gun( const char *id, const char *name, const char *name_en, const char 
               std::initializer_list<const char *> mod_slots,
               std::initializer_list<const char *> aliases_zh,
               std::initializer_list<const char *> aliases_en,
+              std::initializer_list<GunMode> modes,
+              bool reload_and_shoot,
               const char *source );
 
 void add_ammo( const char *id, const char *name, const char *name_en, const char *ammo_type,

@@ -31,6 +31,8 @@ void add_gun( const char *id, const char *name, const char *name_en, const char 
               std::initializer_list<const char *> mod_slots,
               std::initializer_list<const char *> aliases_zh,
               std::initializer_list<const char *> aliases_en,
+              std::initializer_list<GunMode> modes,
+              bool reload_and_shoot,
               const char *source )
 {
     Gun g;
@@ -49,7 +51,18 @@ void add_gun( const char *id, const char *name, const char *name_en, const char 
     g.min_cycle_recoil = min_cycle_recoil;
     g.barrel_length_mm = barrel_length_mm;
     g.disable_sights   = disable_sights;
+    g.reload_and_shoot = reload_and_shoot;
     g.source           = source ? source : "core";
+
+    for( const GunMode &m : modes ) {
+        g.modes.push_back( m );
+    }
+    // 游戏保证每把枪至少有一个 DEFAULT 模式（itype.h:891 的注释）。
+    // 生成器理论上不会漏，但漏了的话后面的取模式代码会拿到空 vector ——
+    // 这里兜一手，按「一次一发」处理。
+    if( g.modes.empty() ) {
+        g.modes.push_back( GunMode{ "DEFAULT", "single", 1 } );
+    }
 
     // handling < 0 表示"按类型自动取"  item_factory.cpp:761
     if( handling < 0 ) {

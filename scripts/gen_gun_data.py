@@ -319,6 +319,7 @@ def main():
 
     # ---- 输出：枪械 --------------------------------------------------------
     n_alias = 0
+    n_multi = 0           # 有连发模式（某模式发数 > 1）的枪
     lines = []
     no_disp = []          # 游戏数据里就没写 dispersion 的枪
     for oid in sorted(guns):
@@ -367,8 +368,32 @@ def main():
             if isinstance(loc, list) and loc and isinstance(loc[0], str):
                 slots.append(loc[0])
 
+        # 射击模式。JSON 是 [ [ 模式id, 显示名, 发数, 可选flag ], ... ]
+        # （item_factory.cpp:3029 的注释）。第 4 个元素（如 "NPC_AVOID"）用不到。
+        modes = []
+        for m in (r.get("modes") or []):
+            if (isinstance(m, list) and len(m) >= 3
+                    and isinstance(m[0], str) and isinstance(m[2], int)):
+                disp = m[1] if isinstance(m[1], str) else m[0]
+                modes.append((m[0], disp, m[2]))
+
+        # ★ 绝大多数枪在 JSON 里**不写 modes**（302/401），靠游戏加载器补：
+        #   没有 DEFAULT 模式时插一个，发数恒为 1（0.I item_factory.cpp:705）。
+        #   不补的话这些枪会一条模式都没有，后面取发数就取不到。
+        if not any(m[0] == "DEFAULT" for m in modes):
+            # 显示名按 item_factory.cpp:695 的 defmode_name()。
+            # 它还有一条 `clip == 1 -> "manual"` 分支，但 clip 这个字段在全库
+            # JSON 里一次都没出现（已迁到 pocket_data），所以那条走不到。
+            defmode = ("revolver"
+                       if skill == "pistol" and "RELOAD_ONE" in gflags
+                       else "semi-auto")
+            modes.insert(0, ("DEFAULT", defmode, 1))
+
+        mode_list = ", ".join("{ %s, %s, %d }" % (cstr(m[0]), cstr(m[1]), m[2])
+                              for m in modes)
+
         lines.append(
-            '    add_gun(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);'
+            '    add_gun(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, { %s }, %s, %s);'
             % (
                 cstr(oid), cstr(name_zh), cstr(name_en), cstr(skill),
                 fnum(parse_unit(r.get("dispersion"), {}, 0)),
@@ -384,13 +409,17 @@ def main():
                 fnum(parse_unit(r.get("barrel_length"), LENGTH_UNITS)),
                 "true" if "DISABLE_SIGHTS" in gflags else "false",
                 cvec(ammo_types), cvec(slots), cvec(aliases_zh), cvec(aliases_en),
+                mode_list,
+                # 弓弩/投石索打完 recoil 直接回满，不参与连射累积
+                "true" if "RELOAD_AND_SHOOT" in gflags else "false",
                 cstr(db.src_of.get(oid, "core")),
             ))
+        n_multi += 1 if any(m[2] > 1 for m in modes) else 0
 
     gun_field_note = ("id, name, name_en, skill, dispersion, sight_dispersion, handling, "
                       "durability, recoil, weight_g, volume_ml, longest_side_mm, "
                       "min_cycle_recoil, barrel_length_mm, disable_sights, ammo_types, mod_slots, "
-                      "aliases_zh, aliases_en, source")
+                      "aliases_zh, aliases_en, modes, reload_and_shoot, source")
     path = os.path.join(args.out, "gen_guns.cpp")
     with io.open(path, "w", encoding="utf-8", newline="\n") as f:
         f.write(HEADER % ("gen_guns.cpp  生成的枪械数据", "core" if not mods else "core + " + ",".join(mods),
@@ -399,7 +428,8 @@ def main():
         f.write("\n")
         f.write("\n".join(lines))
         f.write("\n}\n")
-    print("  写出 %s（%d 条，含 %d 个别名）" % (path, len(guns), n_alias))
+    print("  写出 %s（%d 条，含 %d 个别名，%d 把能连发）"
+          % (path, len(guns), n_alias, n_multi))
     if no_disp:
         print("  [提示] %d 把枪在游戏数据里没有 dispersion 字段（按 C++ 默认值 0 处理）："
               % len(no_disp))
