@@ -184,6 +184,11 @@ Character g_ch;                           // 人物（详情里所有数字都�
 int g_p_dex = 8, g_p_per = 8, g_p_str = 8;   // 界面上可编辑的那几个
 int g_p_skill = 0, g_p_marks = 0;
 
+// 工具栏第二行（人物参数）可以收起来，把纵向空间让给下面的列表和详情。
+// 小窗口下多一行就能多看两把枪。收起时旁边显示一份紧凑摘要，
+// 免得不知道当前参数是什么。
+bool g_show_char_params = true;
+
 // ---- 详情缓存 ---------------------------------------------------------------
 //  两段缓存分开：基础数据很便宜，每次选中就重算；概率表很贵，只在展开时才算。
 
@@ -850,6 +855,27 @@ void draw_toolbar()
         ImGui::EndCombo();
     }
 
+    // 折叠开关。放在第一行末尾（而不是第二行行首）—— 收起之后它必须还在，
+    // 不然就没法再展开了。
+    ImGui::SameLine( 0, GAP * 2 );
+    if( ImGui::SmallButton( g_show_char_params ? zh::g::PARAMS_HIDE
+                                               : zh::g::PARAMS_SHOW ) ) {
+        g_show_char_params = !g_show_char_params;
+    }
+
+    if( !g_show_char_params ) {
+        // 收起时给一份紧凑摘要，否则看不出当前人物参数是多少
+        ImGui::SameLine( 0, GAP * 2 );
+        ImGui::TextDisabled( zh::g::PARAMS_SUMMARY_FMT, g_p_dex, g_p_per, g_p_str,
+                             zh::skill( g_selected >= 0 ? g_work.skill : "rifle" ).c_str(),
+                             g_p_skill, g_p_marks );
+        sync_character();
+        if( g_selected >= 0 ) {
+            g_ch.gun_skill = g_work.skill;
+        }
+        return;
+    }
+
     ImGui::Spacing();
     ImGui::TextDisabled( "%s", zh::g::CHAR_HINT );
     ImGui::SameLine();
@@ -915,9 +941,11 @@ void draw_toolbar()
 //   结果往右拖只能拖到一半就顶住了。必须由调用方把总宽传进来。
 void draw_splitter( float full_w )
 {
-    const float h = ImGui::GetContentRegionAvail().y;
-
+    // ★ 高度要在 SameLine **之后**取。之前取的话光标还在列表下方（已经到底），
+    //   avail 是负数（实测 -4）；ImGui 碰巧把负尺寸当「填满剩余空间」处理了，
+    //   结果虽然对，但纯属巧合。SameLine 之后光标回到行首，拿到的是整个高度。
     ImGui::SameLine( 0.0f, 0.0f );
+    const float h = ImGui::GetContentRegionAvail().y;
     ImGui::InvisibleButton( "##vsplit", ImVec2( SPLITTER_W, h ) );
 
     const bool active  = ImGui::IsItemActive();

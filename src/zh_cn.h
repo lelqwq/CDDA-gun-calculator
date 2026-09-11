@@ -167,6 +167,11 @@ inline const char *P_SKILL      = "武器技能";
 inline const char *P_MARKS      = "枪械技能";
 inline const char *P_SKILL_FMT  = "%s等级";     // 参数是 zh::skill() 的结果
 inline const char *CHAR_HINT    = "人物参数（改动会立刻重算右边所有数值）";
+// 人物参数那一行的折叠开关，以及收起后的紧凑摘要
+inline const char *PARAMS_HIDE   = "▲ 人物参数";
+inline const char *PARAMS_SHOW   = "▼ 人物参数";
+inline const char *PARAMS_SUMMARY_FMT =
+    "敏捷 %d · 感知 %d · 力量 %d · %s %d · 枪法 %d";
 
 // ---- 列表列头 ----
 inline const char *COL_NAME     = "名称";
