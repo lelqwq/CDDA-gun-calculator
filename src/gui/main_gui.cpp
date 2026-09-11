@@ -996,35 +996,17 @@ void draw_aim_levels( const DetailCache &d )
 }
 
 // 瞄准时间线
+//
+// 这里原本还列了三行「压到X档 N 行动点」、一行「一回合后降到 N」和一行
+// 档位阈值。现在全删了 —— 前两组数字与上面「瞄准等级」表里的「瞄准用时」
+// 完全重复，档位阈值则已经进了图的图例，留着只是把同一组数字说三遍。
+// 曲线的走向、每档的穿越点、压到极限后变平，图上都直接看得出来。
 void draw_aim_timeline( const DetailCache &d )
 {
+    // 默认收起：图有 560px 高，展开着会把下面两栏顶得很远
     if( !ImGui::CollapsingHeader( zh::g::SEC_TIMELINE ) ) {
         return;
     }
-    note( "%s", zh::g::TIMELINE_HINT );
-
-    const struct { const char *name; int mv; } rows[] = {
-        { zh::AIM_LEVEL_1, d.aim.moves_to_regular },
-        { zh::AIM_LEVEL_2, d.aim.moves_to_careful },
-        { zh::AIM_LEVEL_3, d.aim.moves_to_precise },
-    };
-    for( const auto &r : rows ) {
-        ImGui::Bullet();
-        const std::string line = fmt_str( zh::g::TO_LEVEL, r.name );
-        ImGui::TextUnformatted( line.c_str() );
-        same_line_after( line.c_str() );
-        ImGui::Text( zh::g::AP, r.mv );
-    }
-
-    ImGui::Spacing();
-    kv( zh::g::ONE_TURN, "%.0f", d.aim.recoil_after_1_turn );
-    note( zh::g::THRESHOLDS, (int)d.aim.regular_th, (int)d.aim.careful_th,
-          (int)d.aim.precise_th );
-
-    // 上面那些数字画成图就是这条曲线：纵轴是回合开始时的瞄准误差，
-    // 从 3000 一路降到「瞄准精度上限」就平了。三条橙色横线是档位阈值，
-    // 曲线穿过哪条，就说明那一回合刚好压进该档位。
-    ImGui::Spacing();
     note( "%s", zh::g::TIMELINE_HINT2 );
     const std::vector<ChartMark> marks = {
         { d.aim.regular_th, zh::AIM_LEVEL_1 },

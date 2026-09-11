@@ -418,8 +418,11 @@ inline const char *CURVE_TIP    = "%d 回合\n%.0f 格";
 inline const char *AXIS_RECOIL   = "瞄准误差";
 inline const char *LEGEND_FMT    = "%s %d";     // 图例里的一条：档位名 + 阈值（截断，与上方「档位阈值」那行一致）
 inline const char *RECOIL_TIP    = "%d 回合\n瞄准误差 %.0f";
+// 这一节现在只剩这一句说明 + 一张图。原本还列着「压到X档 N 行动点」三行、
+// 「一回合后降到 N」和档位阈值 —— 那些数字与上面「瞄准等级」表里的「瞄准用时」
+// 是同一组，档位阈值也已进了图例，删掉免得把同一组数字说三遍。
 inline const char *TIMELINE_HINT2 =
-    "回合开始时的瞄准误差，画成图就是从 3000 一路降下来。橙色横线是三个档位的判定阈值 —— 曲线穿过哪条，就说明那一回合刚好压进该档位；压到最下面那条平了就说明到极限了";
+    "回合开始时的瞄准误差，每消耗 1 点行动力降低一次，所以从 3000 一路降下来。橙色横线是三个档位的判定阈值 —— 曲线穿过哪条，就说明那一回合刚好压进该档位；压到最下面那条平了就说明到极限了。各档位要花多少行动点见上面的「瞄准等级」表";
 inline const char *NO_MODS      = "（未安装任何配件）";
 
 // 配件安装 / 移除
@@ -478,11 +481,9 @@ inline const char *TILE_FMT     = "%d 格";
 inline const char *OVER_TABLE   = "59+ 格（视野上限）";
 
 // ---- 瞄准时间线 ----
-inline const char *TO_LEVEL     = "压到%s";     // 参数是 zh::AIM_LEVEL_n
-inline const char *ONE_TURN     = "一回合（100 行动点）后瞄准误差降到";
-inline const char *THRESHOLDS   = "档位阈值：普通 %d / 仔细 %d / 精准 %d";
-inline const char *TIMELINE_HINT =
-    "从瞄准误差 3000 开始，每消耗 1 点行动力降低一次";
+// 这一节只剩一句说明 + 一张图，文案见上面的 TIMELINE_HINT2。
+// （原来的 TO_LEVEL / ONE_TURN / THRESHOLDS / TIMELINE_HINT 已随那批
+//   重复数字一起删掉。）
 
 // ---- 瞄准档位实例 ----
 inline const char *COL_RECOIL   = "瞄准误差";
