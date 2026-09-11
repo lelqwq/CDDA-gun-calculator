@@ -1234,9 +1234,13 @@ void draw_instance( const DetailCache &d )
             const int rng = range_with_even_chance_of_good_hit( total );
             ImGui::TableNextRow();
             ImGui::TableNextColumn(); ImGui::TextUnformatted( r.name );
-            ImGui::TableNextColumn(); ImGui::Text( "%.0f", r.recoil );
-            ImGui::TableNextColumn(); ImGui::Text( "%.0f", d.fixed_disp );
-            ImGui::TableNextColumn(); ImGui::Text( "%.0f", total );
+            // ★ 一律用 (int) 截断，不用 %.0f。这些值都是小数（普通档阈值是
+            //   348.6、固定散布 299.5），四舍五入会显示成 349 / 300，和同屏
+            //   的图例（用截断）差一个数，看着像 bug。游戏自己也是
+            //   static_cast<int>（0.I ranged.cpp:2221）。
+            ImGui::TableNextColumn(); ImGui::Text( "%d", (int)r.recoil );
+            ImGui::TableNextColumn(); ImGui::Text( "%d", (int)d.fixed_disp );
+            ImGui::TableNextColumn(); ImGui::Text( "%d", (int)total );
             ImGui::TableNextColumn();
             if( rng >= 59 ) ImGui::TextUnformatted( zh::g::OVER_TABLE );
             else            ImGui::Text( zh::g::TILE_FMT, rng );

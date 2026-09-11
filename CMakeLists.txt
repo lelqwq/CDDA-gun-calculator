@@ -1,12 +1,10 @@
 # =============================================================================
 #  CMakeLists.txt  —  gunlab
 # -----------------------------------------------------------------------------
-#  用法：
-#     cmake -B build -S .
-#     cmake --build build
-#     然后运行 build\gunlab.exe（Windows）或 build/gunlab（Linux/macOS）
+#  项目只剩图形界面版（SDL3 + ImGui），用 scripts\build_gui.bat 一键构建。
 #
-#  也可以直接用 scripts\ 下的 .bat 脚本编译（不依赖 CMake）。
+#  ★ 必须用 MinGW，不能用 MSVC：机器上唯一的 SDL3 是 msys64 的 MinGW 版，
+#    MSVC 链不了它。命令行版删掉之后，MSVC 就彻底用不上了。
 # =============================================================================
 
 cmake_minimum_required(VERSION 3.16)
@@ -43,11 +41,7 @@ add_library(gunlab_core STATIC
 )
 target_include_directories(gunlab_core PUBLIC src)
 
-# ---- 命令行版 ---------------------------------------------------------------
-add_executable(gunlab src/gunlab.cpp)
-target_link_libraries(gunlab PRIVATE gunlab_core)
-
-# ---- 图形界面版（需要 SDL3；找不到就只构建命令行版）-------------------------
+# ---- 图形界面版（需要 SDL3）-------------------------------------------------
 # 渲染用 SDL3 自带的 SDL_Renderer，不依赖 OpenGL 加载器。
 find_package(SDL3 QUIET)
 
@@ -87,14 +81,10 @@ if(SDL3_FOUND)
         RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}"
     )
 else()
-    message(STATUS "未找到 SDL3 —— 跳过图形界面版，只构建命令行版")
+    message(FATAL_ERROR
+        "未找到 SDL3。\n"
+        "  图形界面版需要 SDL3，msys64 里装一个：\n"
+        "      pacman -S mingw-w64-x86_64-SDL3\n"
+        "  然后用 scripts\\build_gui.bat 构建（它会带上 msys64 的前缀路径）。\n"
+        "  注意别用 MSVC 生成器 —— 它链不了 MinGW 编译的 SDL3。")
 endif()
-
-# ---- 输出路径 ---------------------------------------------------------------
-# 让 exe 直接落在 build/ 下，而不是 build/Debug/ 之类的子目录（Visual Studio
-# 这类多配置生成器会有子目录，Ninja/Make 不会）。统一一下，方便脚本调用。
-set_target_properties(gunlab PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY         "${CMAKE_BINARY_DIR}"
-    RUNTIME_OUTPUT_DIRECTORY_DEBUG   "${CMAKE_BINARY_DIR}"
-    RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}"
-)

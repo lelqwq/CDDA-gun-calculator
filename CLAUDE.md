@@ -54,12 +54,19 @@ git show 27939e29b8b4ddc081490d9f51de59a459c88df6:src/item.cpp | grep -n -A10 "D
 |---|---|---|
 | **数据层** | `gun_data.h/.cpp` + `generated/` | 结构体、常量、401 把枪 / 730 弹药 / 170 配件的数值 |
 | **计算层** | `gunlab_math.h/.cpp` | **全部公式，纯函数，没有任何输入输出** |
-| **界面层** | `gunlab.cpp`（CLI）、以后的 `src/gui/` | 排版与交互 |
+| **界面层** | `src/gui/main_gui.cpp` | 排版与交互 |
 
-`gunlab_core` 静态库打包前两层。**命令行版和图形版共用它**，所以两边算出
-的数字永远一致 —— 改公式只需改一处。
+`gunlab_core` 静态库打包前两层。
 
-- 改数值 → `gun_data.cpp` 或重新跑生成器（**不要碰 `gunlab.cpp`**）
+> **2026-09-11 起命令行版已删除**（`src/gunlab.cpp` 连同
+> `build_msvc.bat` / `build_gcc.bat`）。图形界面版功能是它的超集，
+> 而且删掉 CLI 之后 **MSVC 构建能力也没了**（GUI 要 SDL3，本机只有
+> msys64 的 MinGW 版）。想验证数值请用下面「四」里的临时程序办法。
+>
+> `zh_cn.h` 里 CLI 专用的 `zh::t` 命名空间和 `zh::hit_tier()`（长格式）
+> 一并删了，现在只剩 `zh::g`（界面文案）+ skill/slot/hit_tier_short。
+
+- 改数值 → `gun_data.cpp` 或重新跑生成器
 - 改公式 → `gunlab_math.cpp`
 - 改文案 → `zh_cn.h`
 - 改交互/排版 → `gunlab.cpp`
@@ -80,51 +87,56 @@ git show 27939e29b8b4ddc081490d9f51de59a459c88df6:src/item.cpp | grep -n -A10 "D
 
 ## 二、构建
 
-三种方式产物名不同，**交叉使用不会冲突**：
+**只有一种方式**：双击 `scripts\build_gui.bat`，产物 `build-gui\gunlab_gui.exe`。
 
-| 方式 | 命令 | 产物 |
-|---|---|---|
-| CMake | `cmake -B build -S . && cmake --build build --config Release` | `build/gunlab.exe` |
-| MSVC 脚本 | 双击 `scripts/build_msvc.bat` | `build/gunlab_msvc.exe` |
-| GCC 脚本 | 双击 `scripts/build_gcc.bat` | `build/gunlab_gcc.exe` |
+手工做的话（脚本就是这三步）：
+
+```powershell
+cmake -B build-gui -S . -G "MinGW Makefiles" `
+      -DCMAKE_PREFIX_PATH=C:/msys64/mingw64 -DCMAKE_BUILD_TYPE=Release
+cmake --build build-gui
+powershell -File scripts\copy_gui_deps.ps1 -Exe build-gui\gunlab_gui.exe -Dest build-gui
+```
+
+> **第 3 步别漏**。手工 `cmake` 重建（尤其删过 `build-gui/`）之后不拷 DLL，
+> 双击 exe 会因为找不到 `SDL3.dll` 直接退出，截图脚本只会报
+> 「没拿到窗口句柄」，看不出真正原因。
+
+CMake 现在**找不到 SDL3 就直接 `FATAL_ERROR`**（以前是跳过 GUI 目标，
+因为那时还有命令行版可编；现在没有退路了，早报错比晚报错好）。
 
 ### 三个必踩的坑
 
-1. **MSVC 必须加 `/utf-8`**（已写在 CMakeLists 和 .bat 里）。
-   不加会按系统代码页 936 解读源码，中文字面量被解坏，报出一堆
-   `C2447 缺少函数标题` 之类的**假语法错误**。
+1. **`C:\msys64\mingw64\bin` 必须在 PATH 里**，否则 g++ 静默失败
+   （退出码 1、无任何错误信息）—— 因为找不到 `cc1plus.exe` 依赖的 DLL。
+   构建脚本里已经加了，手工编译时要自己加。
 
-2. **MinGW 必须 `-static`，且 `C:\msys64\mingw64\bin` 要在 PATH 里**。
-   否则编译静默失败（退出码 1、无任何错误信息），或生成的 exe 双击时
-   报缺 `libgcc_s_seh-1.dll` / `libstdc++-6.dll`。
+2. **MinGW 必须 `-static -static-libgcc -static-libstdc++`**，
+   否则 exe 双击时缺 `libgcc_s_seh-1.dll` / `libstdc++-6.dll`。
 
-3. **编译前要关掉正在运行的 gunlab.exe**，否则链接器报
-   `LNK1104: 无法打开文件`。用 `Get-Process gunlab* | Stop-Process` 收拾。
+3. **编译前要关掉正在运行的 gunlab_gui.exe**，否则链接器打不开输出文件。
+   用 `Get-Process gunlab* | Stop-Process` 收拾。
+
+> MSVC 不再可用（见「一点五」）。CMakeLists 里还留着几处 `if(MSVC)`
+> 分支，那是历史遗留，不用管也不用维护。
 
 ### 环境
 
 - Python：`C:\Python314\python.exe`
 - g++：`C:\msys64\mingw64\bin\g++.exe`（GCC 16.2）
-- MSVC：Visual Studio 18 Community，`14.50.35717`
+- SDL3：msys64 的 `mingw-w64-x86_64-SDL3`
 - **没装 Ninja**，不要用 `-G Ninja`
 
-### 图形界面版（gunlab_gui）
+### GUI 子系统（别改回控制台）
 
-双击 `scripts\build_gui.bat`，产物 `build-gui\gunlab_gui.exe`。
+CMakeLists 里 `WIN32_EXECUTABLE TRUE`（MinGW 下等价 `-mwindows`）。
+不设的话默认是控制台子系统，双击时会先弹一个黑框，里面是启动诊断那两行，
+而且因为控制台按 GBK 读 UTF-8，显示成一片乱码。
 
-**只能用 MinGW 编译**：机器上唯一的 SDL3 是 msys64 的 MinGW 版，MSVC 链不了它，
-所以 `build_gui.bat` 里指定了 `-G "MinGW Makefiles"` 和 `-DCMAKE_PREFIX_PATH=C:/msys64/mingw64`。
-CMake 里写的是 `find_package(SDL3 QUIET)`，**找不到就跳过 GUI 目标**，不会连累命令行版。
-
-**GUI 必须是 GUI 子系统**（CMakeLists 里 `WIN32_EXECUTABLE TRUE`，MinGW 下等价
-`-mwindows`）。不设的话默认是控制台子系统，双击时会先弹一个黑框 ——
-就是启动诊断那两行，而且因为控制台按 GBK 读 UTF-8，显示成一片乱码。
-
-代价是**没有 stdout 了**：启动诊断只在重定向到文件时才收得到。
-所以启动失败的提示必须走 `SDL_ShowSimpleMessageBox`（见 `main_gui.cpp`
-的 `fatal()`），printf 给双击启动的用户看是白搭 —— 现象会变成
-「双击了，什么都没发生」。命令行版（`gunlab.exe`）**保持控制台子系统不动**，
-那是它存在的意义。
+代价是**没有 stdout 了**：启动诊断（字体路径、窗口尺寸）只在重定向到文件时
+才收得到 —— 这正是 `scripts\screenshot_gui.ps1` 的用法。所以**启动失败的提示
+必须走 `SDL_ShowSimpleMessageBox`**（见 `main_gui.cpp` 的 `fatal()`），
+printf 给双击启动的用户看是白搭，现象会变成「双击了，什么都没发生」。
 
 GUI 特有的两个坑：
 
@@ -354,7 +366,7 @@ python scripts/gen_gun_data.py --game "<路径>" --mods Aftershock,Xedra_Evolved
 理论最小    105（所需力量 10）  ✅
 ```
 
-**这个用例现在命令行版和图形版都能复现**（2026-09-11 两边都实测过）。
+这个用例在图形界面里实测复现过（2026-09-11，四项全中）。
 
 复现需要的两个配件 id（生成数据里查的，不是猜的）：
 
@@ -365,31 +377,25 @@ python scripts/gen_gun_data.py --game "<路径>" --mods Aftershock,Xedra_Evolved
 
 弹药选 `5.56 NATO M855 弹`（不是默认的 .223 雷明顿弹）。
 
-命令行版按这个喂（`6` 和 `27` 是**装完机匣之后**列表里的编号 ——
-装上机匣会解锁导轨/瞄具/管下等槽位，配件数从 38 涨到 81）：
+图形界面里搜 `M16A3`，装上 `.223 长管上机匣` + `可调节枪托`，
+弹药选 `5.56 NATO M855 弹`，人物参数设成 技能 5 / 敏捷 12 / 感知 12 / 力量 11，
+对照下面四项。
 
-```
-2 / M16A3 / 0 / 6 / 27 / 空行 / 1 / 5 / 0 / 12 / 12 / 11
- 模式   搜索  选枪  上机匣 枪托  结束装配 弹药 技能 枪械 敏捷 感知 力量
-```
+### 没有命令行版了，怎么验数值
 
-改公式后请用这个用例回归。
-
-### 命令行版与图形版必须始终给出同一个数
-
-两边共用 `gunlab_core`，所以数字一致是**架构承诺**，不是巧合。
-改完任何一侧，都要拿同一把枪对照一遍。命令行版可以用文件重定向喂输入：
+GUI 在这个环境里**点不了也滚不动**（见「点击 / 滚动这类交互，这里验不了」），
+所以算出来的数没法靠操作界面去核对。办法是**写个临时小程序链接
+`gunlab_core`**，直接调计算层的函数打印出来：
 
 ```powershell
-$in = "$env:TEMP\in.txt"
-("2`r`n" + "ak47`r`n" + "0`r`n" + ("`r`n" * 10)) |
-    Out-File -FilePath $in -Encoding ascii
-cmd /c "chcp 65001 >nul && `"build\gunlab.exe`" < `"$in`" > `"$out`" 2>&1"
+$env:PATH = "C:\msys64\mingw64\bin;$env:PATH"
+& "C:\msys64\mingw64\bin\g++.exe" -std=c++17 -O1 -I src `
+    "$env:TEMP\check.cpp" build-gui\libgunlab_core.a -static -o "$env:TEMP\check.exe"
+& "$env:TEMP\check.exe"
 ```
 
-> 别用 `"..." | & $exe` —— PowerShell 会往 stdin 塞 BOM，首行解析失败。
-> 用文件重定向。输入行数要对上：模式 1 行 + 关键词 1 行 + 选枪 1 行，
-> 后面全是空行（装配/弹药/人物都吃默认值）。
+这条路比以前的命令行版**更好用**：能直接按 id 定位枪、能循环跑一批用例、
+能只打印关心的那几项，不用按编号喂输入。用完把临时文件删掉（别提交）。
 
 已经对照过的 AKM 用例（敏捷 8 / 感知 8 / 力量 8 / 技能 0，7.62x39mm 被甲弹）：
 
