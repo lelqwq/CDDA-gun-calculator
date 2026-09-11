@@ -105,6 +105,31 @@ constexpr double BURST_REF_DIST = 10.0;    // 「好击及以上」按 10 格外
 // 横轴对上 —— 图上看中哪个位置，就把间隔调过去看那一轮的逐发明细。
 int g_burst_interval = 2;
 
+// 「误差 → 命中档位」那张图按多少格算。命中档位不只由误差决定，还跟距离有关
+// （未命中度 = 横向偏移 ÷ 目标体积，偏移随距离线性放大），所以距离必须是个参数。
+int g_tier_dist = 10;
+
+// 那张图的采样点（瞄准误差）。刻意不等距：概率的变化几乎都发生在低误差段，
+// 3000 那一带早就平了。等距采样的话右半张图纯属浪费。
+const double TIER_ERR_STEPS[] = {
+    0, 25, 50, 75, 100, 125, 150, 200, 250, 300, 350, 400,
+    500, 600, 700, 850, 1000, 1200, 1500, 2000, 2500, 3000
+};
+constexpr int TIER_ERR_N = (int)( sizeof( TIER_ERR_STEPS ) / sizeof( TIER_ERR_STEPS[0] ) );
+// 每点采样多少次。22 个点 × 2 万 = 44 万次掷骰，实测约 60ms，
+// 只在缓存失效时跑一次（和逐发明细那次是一个量级）。
+constexpr int TIER_PROB_N = 20000;
+
+// 六个档位的颜色，和概率表里的列一一对应
+constexpr ImU32 TIER_COLORS[6] = {
+    IM_COL32( 240, 105, 105, 255 ),   // 爆头
+    IM_COL32( 240, 165,  90, 255 ),   // 暴击
+    IM_COL32( 205, 220, 100, 255 ),   // 好击
+    IM_COL32( 120, 215, 140, 255 ),   // 普通
+    IM_COL32( 110, 175, 235, 255 ),   // 擦伤
+    IM_COL32( 150, 150, 160, 255 ),   // 脱靶
+};
+
 // 逐发明细表里用来标点的颜色（曲线图用不到，那儿每个模式一个色）
 constexpr ImU32 COLOR_FIRST = IM_COL32( 120, 175, 235, 255 );   // 首次开火（蓝）
 constexpr ImU32 COLOR_SUST_1 = IM_COL32( 120, 215, 140, 255 );  // 第一个持续模式（绿）
@@ -184,6 +209,15 @@ struct DetailCache {
     };
     std::vector<SustainedCurve> sustained;
     int burst_interval = 2;                        // 逐发明细用哪个间隔（见 g_burst_interval）
+
+    // 瞄准误差 → 各命中档位的概率分布。
+    //   tier_err[i]     = 第 i 个采样点的瞄准误差（横轴刻度就显示它）
+    //   tier_pct[t][i]  = 该误差下、落在档位 t 的概率（0~1）
+    // 采样点在低误差段密、高误差段疏 —— 概率变化几乎都发生在低段，
+    // 等距采样的话右半张图是一马平川。
+    std::vector<double>              tier_err;
+    std::vector<std::vector<double>> tier_pct;     // [档位][采样点]
+    int tier_dist = 10;                            // 按多少格算的（见 g_tier_dist）
 };
 
 constexpr int    PROB_N      = 200000;
@@ -297,8 +331,18 @@ struct ChartSeries {
 // height(float) 挨着，传反了会隐式转换、编译都不报错。
 struct ChartOpts {
     const char *y_label;                             // 纵轴名，画在左上角，也用作单线图的悬停标签
+    const char *x_label = zh::g::AXIS_TURN;          // 横轴名，画在刻度下面
     const char *y_unit = "";                         // 值的单位后缀，如 " 格"
+    const char *x_unit = "";                         // 横轴刻度值的单位后缀（悬停提示用）
     const char *y_fmt  = "%.0f";                     // 纵轴刻度格式
+    // 自定义横轴刻度文字。**每个点都要填**（悬停提示要用它显示横轴的值），
+    // 留空则用下标（0/1/2…）。用在「横轴不是回合」的图上 —— 比如误差那张图，
+    // 刻度要显示误差值本身，而且采样点是非等距的（低误差段密、高误差段疏）。
+    std::vector<std::string> x_labels;
+    // 轴上每隔几个点画一个刻度文字。0 = 自动（按点数估一个不挤的值）。
+    // ★ 只影响画多少，不影响 x_labels 的内容 —— 提示里要的是那个点的准确值，
+    //   不是「轴上画没画」。
+    int x_tick_step = 0;
     const std::vector<ChartMark> *marks = nullptr;   // 参考横线，可空
     int         y_ticks = 5;                         // 想要几格，实际步长取整成 1/2/5×10ⁿ
     float       height  = 280.0f;                    // 绘图区总高（像素）
@@ -358,10 +402,12 @@ bool key_matches( const T &c )
         && c.skill == g_p_skill && c.marks == g_p_marks;
 }
 
-// DetailCache 的键里多一项「逐发明细的间隔」—— 它也是计算输入
+// DetailCache 的键里还多两项计算输入：逐发明细的间隔、误差图的距离
 bool key_matches_detail( const DetailCache &c )
 {
-    return key_matches( c ) && c.burst_interval == g_burst_interval;
+    return key_matches( c )
+        && c.burst_interval == g_burst_interval
+        && c.tier_dist == g_tier_dist;
 }
 
 template<typename T>
@@ -676,6 +722,30 @@ void compute_detail( const Gun &g, const Ammo *ammo )
             }
         }
         g_detail.sustained.push_back( std::move( sc ) );
+    }
+
+    // ---- 瞄准误差 → 各命中档位概率 ------------------------------------------
+    // 对每个采样误差掷一批骰，再按距离换算成未命中度、分桶统计。
+    // 掷骰本身与距离无关，所以每个误差点只掷一次、六个档位复用同一批样本。
+    g_detail.tier_dist = g_tier_dist;
+    g_detail.tier_err.assign( TIER_ERR_STEPS, TIER_ERR_STEPS + TIER_ERR_N );
+    g_detail.tier_pct.assign( 6, std::vector<double>( TIER_ERR_N, 0.0 ) );
+    {
+        std::mt19937 rng( PROB_SEED );
+        std::vector<double> samples( TIER_PROB_N );
+        for( int i = 0; i < TIER_ERR_N; i++ ) {
+            for( int k = 0; k < TIER_PROB_N; k++ ) {
+                samples[k] = roll_dispersion( g, g_ch, ammo, TIER_ERR_STEPS[i], rng );
+            }
+            long cnt[6] = { 0, 0, 0, 0, 0, 0 };
+            for( int k = 0; k < TIER_PROB_N; k++ ) {
+                cnt[tier_index( missed_by( samples[k], (double)g_tier_dist,
+                                           PROB_TARGET ) )]++;
+            }
+            for( int t = 0; t < 6; t++ ) {
+                g_detail.tier_pct[t][i] = (double)cnt[t] / TIER_PROB_N;
+            }
+        }
     }
 
     store_key( g_detail );
@@ -1137,8 +1207,12 @@ void draw_aim_timeline( const DetailCache &d )
     //   560px 高（绘图区 472px）则拉开到 55 / 20 / 8.5 像素，能分得清。
     const std::vector<ChartSeries> series = { { "", d.recoil_curve, COLOR_FIRST } };
     // 单线图，series 名字留空 → 悬停时用纵轴名当标签
-    draw_line_chart( "##recoil_curve", series,
-                     { zh::g::AXIS_RECOIL, "", "%.0f", &marks, 7, 560.0f } );
+    ChartOpts o;
+    o.y_label = zh::g::AXIS_RECOIL;
+    o.y_ticks = 7;
+    o.height  = 560.0f;
+    o.marks   = &marks;
+    draw_line_chart( "##recoil_curve", series, o );
 }
 
 // 通用折线图：X 轴固定是「瞄准回合」，Y 轴由调用方给名字和格式。
@@ -1217,14 +1291,18 @@ void draw_line_chart( const char *id, const std::vector<ChartSeries> &series,
         dl->AddText( ImVec2( a.x - 8.0f - ts.x, y - ts.y * 0.5f ), col_text, lab.c_str() );
     }
 
-    // 纵向网格 + X 轴刻度（回合多了就隔几个标一个，别挤成一团）
-    const int xstep = std::max( 1, ( N - 1 ) / 10 );
+    // 纵向网格 + X 轴刻度（点多了就隔几个标一个，别挤成一团）
+    const bool custom_x = ( (int)opts.x_labels.size() == N );
+    const int xstep  = std::max( 1, ( N - 1 ) / 10 );      // 网格线
+    const int lstep  = opts.x_tick_step > 0 ? opts.x_tick_step : xstep;   // 刻度文字
     for( int t = 0; t < N; t += xstep ) {
         const float x = px( t );
         dl->AddLine( ImVec2( x, a.y ), ImVec2( x, b.y ), col_grid );
-        const std::string lab = fmt_str( "%d", t );
+    }
+    for( int t = 0; t < N; t += lstep ) {
+        const std::string lab = custom_x ? opts.x_labels[t] : fmt_str( "%d", t );
         const ImVec2 ts = ImGui::CalcTextSize( lab.c_str() );
-        dl->AddText( ImVec2( x - ts.x * 0.5f, b.y + 6.0f ), col_text, lab.c_str() );
+        dl->AddText( ImVec2( px( t ) - ts.x * 0.5f, b.y + 6.0f ), col_text, lab.c_str() );
     }
 
     // 坐标轴
@@ -1336,7 +1414,15 @@ void draw_line_chart( const char *id, const std::vector<ChartSeries> &series,
         //   结果 %d 把字符串指针当整数打印，提示里出现 -459279152 这种鬼数字。
         //   字面量的话编译器能查，而且少一处要同步维护的东西。
         ImGui::BeginTooltip();
-        ImGui::Text( zh::g::TIP_TURN, t );
+        // 第一行是横轴那个点的值。横轴是回合时显示「N 回合」；
+        // 用了自定义刻度（比如误差那张图）就显示刻度本身 + 轴名。
+        if( custom_x ) {
+            ImGui::TextUnformatted(
+                fmt_str( "%s %s%s", opts.x_label, opts.x_labels[t].c_str(),
+                         opts.x_unit ).c_str() );
+        } else {
+            ImGui::Text( zh::g::TIP_TURN, t );
+        }
         for( const ChartSeries &s : series ) {
             dl->AddCircleFilled( ImVec2( px( t ), py( s.data[t] ) ), 5.0f, s.color );
             const char *label = s.name.empty() ? y_label : s.name.c_str();
@@ -1355,9 +1441,9 @@ void draw_line_chart( const char *id, const std::vector<ChartSeries> &series,
     // Y 轴名放绘图区左上角（竖排太麻烦），X 轴名居中放在刻度下面
     dl->AddText( ImVec2( a.x, origin.y + 6.0f ), col_text, y_label );
     {
-        const ImVec2 ts = ImGui::CalcTextSize( zh::g::AXIS_TURN );
+        const ImVec2 ts = ImGui::CalcTextSize( opts.x_label );
         dl->AddText( ImVec2( ( a.x + b.x ) * 0.5f - ts.x * 0.5f, b.y + 28.0f ),
-                     col_text, zh::g::AXIS_TURN );
+                     col_text, opts.x_label );
     }
 }
 
@@ -1477,8 +1563,12 @@ void draw_range_curve( const DetailCache &d )
                             palette[i % 3] } );
     }
 
-    draw_line_chart( "##range_curve", series,
-                     { zh::g::AXIS_RANGE, " 格", "%.0f", nullptr, 5, 340.0f } );
+    ChartOpts o;
+    o.y_label = zh::g::AXIS_RANGE;
+    o.y_unit  = " 格";
+    o.y_ticks = 5;
+    o.height  = 340.0f;
+    draw_line_chart( "##range_curve", series, o );
 
     // 逐发明细的间隔控件。放在这儿是为了让它和图的横轴对上 ——
     // 图上看中哪个位置，把间隔调过去就能看那一轮的逐发明细。
@@ -1541,6 +1631,52 @@ void draw_instance( const DetailCache &d )
         }
         ImGui::EndTable();
     }
+}
+
+// 瞄准误差 → 各命中档位概率。横轴是瞄准误差本身（不是回合），
+// 六条线是六个档位。距离用左下角的控件调 —— 命中档位还取决于距离。
+void draw_tier_curve( const DetailCache &d )
+{
+    if( !ImGui::CollapsingHeader( zh::g::SEC_TIERCURVE, ImGuiTreeNodeFlags_DefaultOpen ) ) {
+        return;
+    }
+    note( "%s", zh::g::TIERCURVE_HINT );
+
+    ImGui::TextUnformatted( zh::g::TIER_DIST );
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth( 90 );
+    ImGui::InputInt( "##tier_dist", &g_tier_dist, 1, 5 );
+    ImGui::SameLine();
+    ImGui::TextDisabled( "%s", zh::g::TIER_DIST_UNIT );
+    g_tier_dist = std::max( 1, std::min( 59, g_tier_dist ) );
+
+    // 横轴刻度：每个点都存（悬停提示要用准确值），轴上每 3 个画一个
+    std::vector<std::string> labels;
+    labels.reserve( d.tier_err.size() );
+    for( double e : d.tier_err ) {
+        labels.push_back( fmt_str( "%.0f", e ) );
+    }
+
+    std::vector<ChartSeries> series;
+    for( int t = 0; t < 6; t++ ) {
+        series.push_back( { zh::hit_tier_short( t ), {}, TIER_COLORS[t] } );
+        series.back().data.assign( d.tier_pct[t].begin(), d.tier_pct[t].end() );
+        // 图上的纵轴用百分比，比 0~1 好读
+        for( double &v : series.back().data ) { v *= 100.0; }
+    }
+
+    // 纵轴刻度直接带百分号（"%.0f%%" 走 printf，所以百分号要写两个）；
+    // 悬停提示用的是字面量格式串，单位从那边的 y_unit 补。
+    ChartOpts o;
+    o.y_label  = zh::g::AXIS_TIER_PCT;
+    o.x_label  = zh::g::AXIS_RECOIL;
+    o.y_unit   = "%";
+    o.y_fmt    = "%.0f%%";
+    o.y_ticks  = 5;
+    o.height   = 340.0f;
+    o.x_labels = labels;
+    o.x_tick_step = 3;                 // 22 个点全标会糊成一片
+    draw_line_chart( "##tier_curve", series, o );
 }
 
 // 命中档位概率（贵，只在展开时算）
@@ -1622,6 +1758,7 @@ void draw_detail()
     draw_aim_levels( g_detail );
     draw_aim_timeline( g_detail );
     draw_range_curve( g_detail );
+    draw_tier_curve( g_detail );
     draw_instance( g_detail );
     draw_probabilities( g, ammo );
 

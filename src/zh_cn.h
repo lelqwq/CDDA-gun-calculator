@@ -189,6 +189,15 @@ inline const char *SEC_AIMLEVEL = "瞄准等级";
 inline const char *SEC_TIMELINE = "瞄准时间线";
 inline const char *SEC_INSTANCE = "瞄准档位实例";
 inline const char *SEC_CURVE    = "瞄准收益与连射";
+inline const char *SEC_TIERCURVE = "误差与命中档位";
+
+// 瞄准误差 → 各命中档位概率
+inline const char *TIERCURVE_HINT =
+    "横轴是瞄准误差本身（不是回合），六条线是六个命中档位。距离可调 —— 命中档位不只由误差决定：未命中度 = 横向偏移 ÷ 目标体积，而偏移随距离线性放大，所以同一个误差在 5 格和 40 格完全是两回事。\n"
+    "★ 注意左端不会升到 100%：误差降到 0 也还有「固定散布」垫着（枪身+弹药散布 ÷18、敏捷修正、技能不足惩罚 —— 就是「瞄准参数」里的『总散布』）。技能低时这一项极大：技能 0 的 AKM 是 287.5，而枪自身散布只有 12 —— 这时候卡住你的是技能，不是枪";
+inline const char *TIER_DIST      = "距离";
+inline const char *TIER_DIST_UNIT = " 格";
+inline const char *AXIS_TIER_PCT  = "各档位概率";
 inline const char *SEC_PROB     = "命中档位概率";
 
 // ---- 连射（持续射击）----
