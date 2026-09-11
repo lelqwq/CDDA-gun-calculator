@@ -97,6 +97,11 @@ char             g_search[128] = "";
 std::vector<int> g_hits;                  // 搜索命中的枪械下标
 int              g_selected = -1;         // 当前选中的枪械下标
 
+// 列表排序。点列标题切换，再点一下反向，点第三下取消（ImGui 的行为）。
+// -1 = 默认顺序，也就是 search_guns 给的顺序（按 id，即数据库顺序）。
+int  g_sort_col  = -1;
+bool g_sort_desc = false;
+
 // 选中枪械的工作副本。装/卸配件改的是它，g_guns 那份只读数据库保持原样 ——
 // 否则换个枪再换回来，之前装的配件会「粘」在数据库上。
 Gun g_work;
@@ -349,9 +354,51 @@ void select_gun( int idx )
     refresh_ammo_choices( false );
 }
 
+// 按当前排序列重排 g_hits。
+//
+// 用 stable_sort：技能这种有大量同值的列，同组内会自动保持原有顺序
+// （默认是按 id），不会每次点都抖一下。
+//
+// ★ 名称和技能比的都是**界面上显示的那串文字**（中文），所以是按 UTF-8
+//   码点比的 —— 汉字落在 CJK 统一表意文字区，那个区段本身就是按
+//   「部首 + 笔画」排的，所以结果是字典的部首序，不是拼音序。
+//   好处是所见即所排；代价是别指望按拼音找枪，那个用搜索框更合适。
+void apply_sort()
+{
+    if( g_sort_col < 0 ) {
+        return;                      // 默认顺序，不动
+    }
+
+    const bool desc = g_sort_desc;
+    std::stable_sort( g_hits.begin(), g_hits.end(), [desc]( int a, int b ) {
+        const Gun &ga = g_guns[a];
+        const Gun &gb = g_guns[b];
+
+        int cmp = 0;
+        switch( g_sort_col ) {
+            case 0:                                   // 名称
+                cmp = ga.name.compare( gb.name );
+                break;
+            case 1:                                   // 技能
+                cmp = zh::skill( ga.skill ).compare( zh::skill( gb.skill ) );
+                break;
+            case 2: {                                 // 重量
+                const double wa = effective_weight( ga );
+                const double wb = effective_weight( gb );
+                cmp = ( wa < wb ) ? -1 : ( wa > wb ) ? 1 : 0;
+                break;
+            }
+            default:
+                break;
+        }
+        return desc ? ( cmp > 0 ) : ( cmp < 0 );
+    } );
+}
+
 void refresh_hits()
 {
     g_hits = search_guns( g_search );
+    apply_sort();                    // 换了关键词要按当前排序列重新排
 }
 
 // ---- 缓存计算 ---------------------------------------------------------------
@@ -525,12 +572,36 @@ void draw_gun_list()
     ImGui::BeginChild( "list", ImVec2( 380, 0 ), ImGuiChildFlags_Borders );
     if( ImGui::BeginTable( "guns", 3,
                            ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
-                           ImGuiTableFlags_ScrollY ) ) {
+                           ImGuiTableFlags_ScrollY | ImGuiTableFlags_Sortable |
+                           // 三态：升序 → 降序 → 取消。没有它就回不到默认顺序
+                           // （按 id，即数据库顺序）了，只能重启程序
+                           ImGuiTableFlags_SortTristate ) ) {
         ImGui::TableSetupScrollFreeze( 0, 1 );
         ImGui::TableSetupColumn( zh::g::COL_NAME, ImGuiTableColumnFlags_WidthStretch );
         ImGui::TableSetupColumn( zh::g::COL_SKILL, ImGuiTableColumnFlags_WidthFixed, 64 );
         ImGui::TableSetupColumn( zh::g::COL_WEIGHT, ImGuiTableColumnFlags_WidthFixed, 80 );
         ImGui::TableHeadersRow();
+
+        // 排序状态只能在 TableHeadersRow() 之后读 —— 表头是那一步画的，
+        // 点击也是那一步处理的。重排要放在下面遍历 g_hits 之前。
+        if( ImGuiTableSortSpecs *specs = ImGui::TableGetSortSpecs() ) {
+            specs->SpecsDirty = false;
+            if( specs->SpecsCount > 0 ) {
+                const int  col  = (int)specs->Specs[0].ColumnIndex;
+                const bool desc = ( specs->Specs[0].SortDirection
+                                    == ImGuiSortDirection_Descending );
+                if( col != g_sort_col || desc != g_sort_desc ) {
+                    g_sort_col  = col;
+                    g_sort_desc = desc;
+                    apply_sort();
+                }
+            } else if( g_sort_col >= 0 ) {
+                // 点第三下取消排序，回到默认顺序
+                g_sort_col  = -1;
+                g_sort_desc = false;
+                g_hits = search_guns( g_search );
+            }
+        }
 
         for( int idx : g_hits ) {
             const Gun &g = g_guns[idx];
