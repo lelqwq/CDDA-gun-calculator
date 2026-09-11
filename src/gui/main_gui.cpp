@@ -220,26 +220,12 @@ struct DetailCache {
     int tier_dist = 10;                            // 按多少格算的（见 g_tier_dist）
 };
 
-constexpr int    PROB_N      = 200000;
+// 目标体积固定 1.0 格（人形怪）。命中档位还跟目标体积有关，本工具不做区分。
 constexpr double PROB_TARGET = 1.0;
-constexpr unsigned PROB_SEED = 20260910u;   // 固定种子，和命令行版一致
-constexpr int    PROB_NDIST  = 7;
-constexpr int    PROB_NTIER  = 6;
-constexpr int    PROB_NLEVEL = 4;
-const double     PROB_DISTS[PROB_NDIST] = { 1, 2, 5, 10, 20, 30, 40 };
-
-struct ProbCache {
-    bool valid    = false;
-    int  gun_idx  = -1;
-    int  ammo_idx = -1;
-    int  work_rev = -1;
-    int  dex = 0, per = 0, str = 0, skill = 0, marks = 0;
-    double th[PROB_NLEVEL] = { 0, 0, 0, 0 };                 // 各档位的瞄准误差
-    double pct[PROB_NLEVEL][PROB_NDIST][PROB_NTIER] = {};    // 百分比
-};
+// 固定随机种子 —— 结果可复现，反复对照同一个数不会变
+constexpr unsigned PROB_SEED = 20260910u;
 
 DetailCache g_detail;
-ProbCache   g_probs;
 
 // ---- 小工具 -----------------------------------------------------------------
 
@@ -462,7 +448,6 @@ void mods_changed()
 {
     g_work_rev++;
     g_detail.valid = false;
-    g_probs.valid  = false;
     refresh_ammo_choices( true );
 }
 
@@ -500,7 +485,6 @@ void select_gun( int idx )
 {
     g_selected = idx;
     g_detail.valid = false;
-    g_probs.valid  = false;
     g_work_rev = 0;
     g_ammo_choices.clear();
     g_ammo_pick = -1;
@@ -781,36 +765,10 @@ void compute_detail( const Gun &g, const Ammo *ammo )
     g_detail.valid = true;
 }
 
-void compute_probs( const Gun &g, const Ammo *ammo, const AimResult &ar )
-{
-    g_probs.valid = false;
-
-    g_probs.th[0] = MAX_RECOIL;
-    g_probs.th[1] = ar.regular_th;
-    g_probs.th[2] = ar.careful_th;
-    g_probs.th[3] = ar.precise_th;
-
-    std::mt19937 rng( PROB_SEED );
-    std::vector<double> samples( PROB_N );
-
-    for( int L = 0; L < PROB_NLEVEL; L++ ) {
-        for( int i = 0; i < PROB_N; i++ ) {
-            samples[i] = roll_dispersion( g, g_ch, ammo, g_probs.th[L], rng );
-        }
-        for( int d = 0; d < PROB_NDIST; d++ ) {
-            long cnt[PROB_NTIER] = { 0, 0, 0, 0, 0, 0 };
-            for( int i = 0; i < PROB_N; i++ ) {
-                cnt[tier_index( missed_by( samples[i], PROB_DISTS[d], PROB_TARGET ) )]++;
-            }
-            for( int t = 0; t < PROB_NTIER; t++ ) {
-                g_probs.pct[L][d][t] = 100.0 * (double)cnt[t] / PROB_N;
-            }
-        }
-    }
-
-    store_key( g_probs );
-    g_probs.valid = true;
-}
+// compute_probs() 已删除：它算的是「命中档位概率」表。
+// 那张表被「误差与命中档位」图取代了 —— 图能连续看误差、距离任意调，
+// 而且暴击给的是过了 crit_roll 的真实比例（表里是档位上限）。
+// 表里唯一多的是「爆头」，但那一档依赖目标数据，本来也算不出来。
 
 // ---- 顶部：搜索 + 人物参数 ---------------------------------------------------
 
@@ -1005,7 +963,6 @@ void draw_detail_header( const Gun &g )
             if( ImGui::Selectable( a.name.c_str(), g_ammo_pick == i ) ) {
                 g_ammo_pick = i;
                 g_detail.valid = false;
-                g_probs.valid  = false;
             }
             ImGui::PopID();
         }
@@ -1710,52 +1667,6 @@ void draw_tier_curve( const DetailCache &d )
     draw_line_chart( "##tier_curve", series, o );
 }
 
-// 命中档位概率（贵，只在展开时算）
-void draw_probabilities( const Gun &g, const Ammo *ammo )
-{
-    if( !ImGui::CollapsingHeader( zh::g::SEC_PROB, ImGuiTreeNodeFlags_DefaultOpen ) ) {
-        return;                       // 没展开就一分钱不花
-    }
-    note( "%s", zh::g::PROB_HINT );
-    note( "%s", zh::g::PROB_RULE );
-
-    if( !key_matches( g_probs ) ) {
-        compute_probs( g, ammo, g_detail.aim );
-    }
-
-    const char *lv_name[PROB_NLEVEL] = {
-        zh::AIM_LEVEL_0, zh::AIM_LEVEL_1, zh::AIM_LEVEL_2, zh::AIM_LEVEL_3
-    };
-
-    for( int L = 0; L < PROB_NLEVEL; L++ ) {
-        ImGui::Spacing();
-        ImGui::Text( zh::g::PROB_LEVEL, lv_name[L], (int)g_probs.th[L] );
-
-        ImGui::PushID( L );
-        if( ImGui::BeginTable( "prob", PROB_NTIER + 1,
-                               ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV ) ) {
-            ImGui::TableSetupColumn( zh::g::COL_DIST, ImGuiTableColumnFlags_WidthFixed, 90 );
-            for( int t = 0; t < PROB_NTIER; t++ ) {
-                ImGui::TableSetupColumn( zh::hit_tier_short( t ),
-                                         ImGuiTableColumnFlags_WidthStretch );
-            }
-            ImGui::TableHeadersRow();
-
-            for( int d = 0; d < PROB_NDIST; d++ ) {
-                ImGui::TableNextRow();
-                ImGui::TableNextColumn();
-                ImGui::Text( zh::g::TILE_FMT, (int)PROB_DISTS[d] );
-                for( int t = 0; t < PROB_NTIER; t++ ) {
-                    ImGui::TableNextColumn();
-                    ImGui::Text( "%.1f%%", g_probs.pct[L][d][t] );
-                }
-            }
-            ImGui::EndTable();
-        }
-        ImGui::PopID();
-    }
-}
-
 void draw_detail()
 {
     ImGui::BeginChild( "detail", ImVec2( 0, 0 ), ImGuiChildFlags_Borders );
@@ -1791,7 +1702,6 @@ void draw_detail()
     draw_range_curve( g_detail );
     draw_tier_curve( g_detail );
     draw_instance( g_detail );
-    draw_probabilities( g, ammo );
 
     ImGui::EndChild();
 }

@@ -200,7 +200,8 @@ inline const char *TIERCURVE_HINT =
 inline const char *TIER_DIST      = "距离";
 inline const char *TIER_DIST_UNIT = " 格";
 inline const char *AXIS_TIER_PCT  = "各档位概率";
-inline const char *SEC_PROB     = "命中档位概率";
+// SEC_PROB（「命中档位概率」那张表）已删除 —— 它被上面那张图取代了，
+// 图的误差连续、距离任意调，而且暴击给的是真实比例。
 
 // ---- 连射（持续射击）----
 // 曲线图里每条线的名字
@@ -320,14 +321,6 @@ inline const char *COL_FIXDISP  = "固定散布";
 inline const char *COL_TOTDISP  = "总散布";
 inline const char *INSTANCE_HINT =
     "总散布 = 瞄准误差 + 固定散布。固定散布不随瞄准进度变化（枪身+弹药散布 ÷18、敏捷修正、技能不足惩罚三项相加）；目标体积按 1.0 格的人形怪计算";
-
-// ---- 命中档位概率 ----
-inline const char *COL_DIST     = "距离";
-inline const char *PROB_HINT    =
-    "对指定距离的目标开一枪，各命中档位出现的概率。每档采样 20 万次，固定种子，结果不会每次运行都变";
-inline const char *PROB_RULE    =
-    "判定阈值（未命中度，越小越准）：爆头 0.1 / 暴击 0.2 / 好击 0.5 / 普通 0.8 / 擦伤 1.0 / 脱靶 ≥1.0";
-inline const char *PROB_LEVEL   = "%s（瞄准误差 %d）";
 
 } // namespace g
 
