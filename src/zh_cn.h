@@ -45,22 +45,64 @@ inline std::string skill( const std::string &key )
 }
 
 // 改装槽位名
+//
+//  译文全部取自游戏 .mo 里对同名 key 的翻译（这些 key 在游戏里也是直接
+//  拿去查翻译表的）。数据里实际出现过 26 种，这里覆盖全。
+//
+//  ★ 注意「底座」那一族：游戏把 rail / sights / stock / underbarrel 这些
+//    槽位和它们的 *_mount 版本分得很清楚，前者是枪自带的槽，后者是配件
+//    提供的底座。只写 base 名会让 mount 系列漏成英文。
+//
+//  唯一没有官方译文的是 "launcher"（管下榴弹发射器挂载），游戏自己也是
+//  显示英文，所以这里不为它编一个。返回原 key。
 inline std::string slot( const std::string &key )
 {
-    if( key == "rail" )            return "导轨";
-    if( key == "sights" )          return "瞄具";
-    if( key == "underbarrel" )     return "管下";
-    if( key == "muzzle" )          return "枪口";
+    // 枪身自带的槽位
     if( key == "barrel" )          return "枪管";
     if( key == "bore" )            return "口径";
     if( key == "mechanism" )       return "机械";
+    if( key == "muzzle" )          return "枪口";
     if( key == "stock" )           return "枪托";
     if( key == "stock accessory" ) return "枪托配件";
     if( key == "sling" )           return "背带";
     if( key == "brass catcher" )   return "弹壳收集器";
     if( key == "bayonet lug" )     return "刺刀座";
+    if( key == "dampening" )       return "减震器";
+    if( key == "loading port" )    return "装弹口";
+
+    // 配件提供的底座槽位
+    if( key == "rail" )            return "导轨";
+    if( key == "rail mount" )      return "导轨底座";
+    if( key == "sights" )          return "瞄具";
+    if( key == "sights mount" )    return "瞄具底座";
+    if( key == "underbarrel" )     return "管下";
+    if( key == "underbarrel mount" ) return "管下底座";
+    if( key == "stock mount" )     return "枪托底座";
+    if( key == "grip" )            return "握把";
+    if( key == "grip mount" )      return "握把底座";
+
+    // 其余专用槽位
     if( key == "magnifier" )       return "变焦器";
-    if( key == "dampening" )       return "减震";
+    if( key == "lens" )            return "镜头";
+    if( key == "arrow rest" )      return "箭托";
+    if( key == "stabilizer" )      return "稳定器";
+    if( key == "emitter" )         return "发射器";
+    if( key == "belt clip" )       return "皮带扣";
+    if( key == "condenser" )       return "冷凝器";
+    if( key == "slingshot" )       return "弹弓";
+    if( key == "accessories" )     return "配件";
+    if( key == "conversion" )      return "改装";
+    if( key == "magazine" )        return "弹仓";
+
+    // 带下划线的写法。游戏数据里同时存在 "rail mount" 和 "rail_mount"
+    // 两种写法，而且游戏给它们准备了**各自独立**的译文 ——
+    // sights_mount 译作「瞄具接口」，sights mount 却译作「瞄具底座」。
+    // 看着像游戏自己译岔了，但本项目以对齐游戏界面为准，所以照抄。
+    if( key == "rail_mount" )      return "导轨底座";
+    if( key == "sights_mount" )    return "瞄具接口";
+    if( key == "stock_mount" )     return "枪托底座";
+    if( key == "underbarrel_mount" ) return "管下底座";
+
     return key;
 }
 
