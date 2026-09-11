@@ -91,6 +91,26 @@ constexpr float LABEL_W = 220.0f;
 // 同级的空格间距
 constexpr float GAP     = 18.0f;
 
+// 曲线横轴（瞄准回合）的最大值。多条曲线共用一个横轴，所以是定长。
+constexpr int CURVE_MAX_TURNS = 8;
+
+// 逐发明细表最多列几发（游戏里有 50 发、100 发的高速全自动）
+constexpr int BURST_MAX_ROWS = 12;
+// 逐发明细里每发算概率用的采样数。概率表那边用 20 万，这里最多 12 发，
+// 乘起来太贵；2 万够看出量级了（实测整套约 30ms，只在缓存失效时跑一次）。
+constexpr int    BURST_PROB_N   = 20000;
+constexpr double BURST_REF_DIST = 10.0;    // 「好击及以上」按 10 格外算（列头里有写）
+
+// 逐发明细用哪个「两发之间的瞄准回合数」。做成可调是为了让它和曲线图的
+// 横轴对上 —— 图上看中哪个位置，就把间隔调过去看那一轮的逐发明细。
+int g_burst_interval = 2;
+
+// 逐发明细表里用来标点的颜色（曲线图用不到，那儿每个模式一个色）
+constexpr ImU32 COLOR_FIRST = IM_COL32( 120, 175, 235, 255 );   // 首次开火（蓝）
+constexpr ImU32 COLOR_SUST_1 = IM_COL32( 120, 215, 140, 255 );  // 第一个持续模式（绿）
+constexpr ImU32 COLOR_SUST_2 = IM_COL32( 240, 165, 90, 255 );   // 第二个（橙）
+constexpr ImU32 COLOR_SUST_3 = IM_COL32( 215, 130, 210, 255 );  // 第三个（紫）
+
 // ---- 全局状态 ---------------------------------------------------------------
 
 char             g_search[128] = "";
@@ -144,6 +164,26 @@ struct DetailCache {
     // 两条曲线出自同一趟循环，所以一一对应。
     std::vector<double> curve;
     std::vector<double> recoil_curve;
+
+    // 连射：每个射击模式一条「持续射击」曲线（长度与 curve 相同），
+    // 外加稳态下这一轮逐发的明细。
+    struct SustainedCurve {
+        std::string         label;                 // 图例名
+        int                 qty = 1;
+        bool                reload_and_shoot = false;
+        std::vector<double> range;                 // range[t] = 间隔 t 回合时的 50%好击距离
+
+        // 逐发明细，取的是 burst_interval 那个间隔下的稳态。
+        // 只对 qty > 1 的模式算 —— 一轮一发的没什么好拆的。
+        double              burst_start_recoil = 0.0;
+        std::vector<double> burst_shot_recoil;
+        std::vector<double> burst_goodplus;        // 每发「好击及以上」的概率（0~1）
+        double              burst_end_recoil = 0.0;
+        int                 burst_shown = 0;       // 实际列出的发数（可能被截断）
+        bool                burst_over_cap = false; // 中途有没有超过 MAX_RECOIL
+    };
+    std::vector<SustainedCurve> sustained;
+    int burst_interval = 2;                        // 逐发明细用哪个间隔（见 g_burst_interval）
 };
 
 constexpr int    PROB_N      = 200000;
@@ -169,8 +209,24 @@ ProbCache   g_probs;
 
 // ---- 小工具 -----------------------------------------------------------------
 
+// 让编译器按 printf 规则检查自定义的变参函数。
+//
+// ★ 别指望它兜住所有情况：GCC 的 -Wformat **只检查字符串字面量**，而本项目
+//   绝大多数格式串是 zh::g::XXX 这样的常量变量，它取不到值就跳过不查。
+//   （实测过：故意把 %d 写成 %.0f 再传 int，加了属性照样 0 警告。）
+//   所以这里只能拦住少数直接传字面量的调用，剩下的得自己盯。
+//
+//   真踩过：卡壳警告里写 %.0f 却传 (int)，界面上显示成「recoil 0」。
+//   varargs 里 int 和 double 对不上是未定义行为 —— 不报错，但值是错的。
+#if defined(__GNUC__)
+#  define PRINTF_LIKE( fmt_idx, arg_idx ) __attribute__((format(printf, fmt_idx, arg_idx)))
+#else
+#  define PRINTF_LIKE( fmt_idx, arg_idx )
+#endif
+
 // 界面上的文案大多带 %d / %.1f 之类的占位符，先格式化再交给 ImGui。
 // 不用 std::format 是因为 GCC 16 的 libstdc++ 才有，MSVC 侧版本不一致。
+std::string fmt_str( const char *fmt, ... ) PRINTF_LIKE( 1, 2 );
 std::string fmt_str( const char *fmt, ... )
 {
     char buf[512];
@@ -192,6 +248,7 @@ void same_line_after( const char *rendered, float min_x = LABEL_W )
 }
 
 // 「标签 ←(对齐到 LABEL_W)→ 数值」
+void kv( const char *label, const char *fmt, ... ) PRINTF_LIKE( 2, 3 );
 void kv( const char *label, const char *fmt, ... )
 {
     ImGui::TextUnformatted( label );
@@ -228,24 +285,32 @@ struct ChartMark {
     const char *label;
 };
 
-// 定义在下面「瞄准档位实例」附近。这里前置声明是因为瞄准时间线的图要用它，
-// 而那个函数定义在更前面。
+// 图上的一条线
+struct ChartSeries {
+    std::string         name;    // 图例名，空字符串 = 不上图例（单线图用）
+    std::vector<double> data;
+    ImU32               color = 0;
+};
+
 // 折线图的参数。
 // 收成结构体是因为字段一多，位置传参就很容易串 —— 尤其 y_ticks(int) 和
 // height(float) 挨着，传反了会隐式转换、编译都不报错。
 struct ChartOpts {
-    const char *y_label;                             // 纵轴名，画在左上角
-    const char *tip_fmt;                             // 悬停提示格式：(回合, 值)
+    const char *y_label;                             // 纵轴名，画在左上角，也用作单线图的悬停标签
+    const char *y_unit = "";                         // 值的单位后缀，如 " 格"
     const char *y_fmt  = "%.0f";                     // 纵轴刻度格式
     const std::vector<ChartMark> *marks = nullptr;   // 参考横线，可空
     int         y_ticks = 5;                         // 想要几格，实际步长取整成 1/2/5×10ⁿ
     float       height  = 280.0f;                    // 绘图区总高（像素）
 };
 
-void draw_line_chart( const char *id, const std::vector<double> &data,
+// 定义在下面「瞄准档位实例」附近。这里前置声明是因为瞄准时间线的图要用它，
+// 而那个函数定义在更前面。
+void draw_line_chart( const char *id, const std::vector<ChartSeries> &series,
                       const ChartOpts &opts );
 
 // 灰色小字说明，自动换行
+void note( const char *fmt, ... ) PRINTF_LIKE( 1, 2 );
 void note( const char *fmt, ... )
 {
     char buf[1024];
@@ -291,6 +356,12 @@ bool key_matches( const T &c )
         && c.work_rev == g_work_rev
         && c.dex == g_p_dex && c.per == g_p_per && c.str == g_p_str
         && c.skill == g_p_skill && c.marks == g_p_marks;
+}
+
+// DetailCache 的键里多一项「逐发明细的间隔」—— 它也是计算输入
+bool key_matches_detail( const DetailCache &c )
+{
+    return key_matches( c ) && c.burst_interval == g_burst_interval;
 }
 
 template<typename T>
@@ -521,45 +592,90 @@ void compute_detail( const Gun &g, const Ammo *ammo )
             range_with_even_chance_of_good_hit( g_detail.fixed_disp + th[i] );
     }
 
-    // ---- 逐回合推进瞄准 -----------------------------------------------------
-    // 一趟循环同时产出两条曲线：这一回合能打多远，以及回合开始时的瞄准误差。
-    // 与命令行版 print_range_curve 逐行对应（含 ctx 的取法）—— 两边必须
-    // 给出一条一样的曲线。
+    // 后面的曲线和连射计算都要用这个 ctx，算一次共用
+    AimContext cctx;
+    cctx.len_factor = 1.0;
+    cctx.limit      = g_detail.accuracy_limit;
+    cctx.vol_factor = aim_factor_from_volume( g, effective_volume( g ) );
+
+    auto to_range = [&]( double recoil ) {
+        return (double)range_with_even_chance_of_good_hit( g_detail.fixed_disp + recoil );
+    };
+
+    // ---- 冷启动曲线 ---------------------------------------------------------
+    // 横轴第 t 点 = 从满误差瞄 t 回合后开火能打多远。这就是图上的「首次开火」。
+    //
+    // 注：原来这里「连续 3 回合没变化就提前收尾」（那是给终端 ASCII 图控宽度
+    // 用的）。现在多条曲线要共用同一个横轴，改成固定长度。
+    g_detail.curve.clear();
+    g_detail.recoil_curve.clear();
     {
-        AimContext cctx;
-        cctx.len_factor = 1.0;
-        cctx.limit      = g_detail.accuracy_limit;
-        cctx.vol_factor = aim_factor_from_volume( g, effective_volume( g ) );
-
-        const int TURN = 100;     // 一回合的行动点
-        const int MAXT = 20;      // 最多算 20 回合
-        g_detail.curve.clear();
-        g_detail.recoil_curve.clear();
-
         double recoil = MAX_RECOIL;
-        int    flat   = 0;
-        for( int t = 0; t <= MAXT; t++ ) {
-            g_detail.curve.push_back(
-                range_with_even_chance_of_good_hit( g_detail.fixed_disp + recoil ) );
+        for( int t = 0; t <= CURVE_MAX_TURNS; t++ ) {
+            g_detail.curve.push_back( to_range( recoil ) );
             g_detail.recoil_curve.push_back( recoil );
+            recoil = aim_for_turns( g, g_ch, recoil, 1, cctx );
+        }
+    }
 
-            const size_t n = g_detail.curve.size();
-            if( t > 0 && g_detail.curve[n - 1] == g_detail.curve[n - 2] ) {
-                if( ++flat >= 3 ) {
-                    break;         // 连续 3 回合没变化，再瞄也没意义了
+    // ---- 持续射击：每个射击模式一条 -----------------------------------------
+    g_detail.burst_interval = g_burst_interval;
+    g_detail.sustained.clear();
+    for( const GunMode &m : g.modes ) {
+        DetailCache::SustainedCurve sc;
+        sc.qty  = m.qty;
+        sc.reload_and_shoot = g.reload_and_shoot;
+        const std::string mname = zh::mode_name( m.name );
+        sc.label = ( m.qty == 1 )
+                   ? fmt_str( zh::g::MODE_FMT_1, mname.c_str() )
+                   : fmt_str( zh::g::MODE_FMT_N, mname.c_str(), m.qty );
+
+        sc.range.reserve( CURVE_MAX_TURNS + 1 );
+        for( int t = 0; t <= CURVE_MAX_TURNS; t++ ) {
+            sc.range.push_back(
+                to_range( sustained_fire_recoil( g, g_ch, ammo, m.qty, t, cctx ) ) );
+        }
+
+        // 逐发明细：只对连发模式算（一轮一发的没什么好拆的）。
+        // 最多列 12 发 —— 游戏里有 50 发、100 发的高速全自动，全列会刷屏。
+        if( m.qty > 1 ) {
+            const double start = sustained_fire_recoil(
+                g, g_ch, ammo, m.qty, g_detail.burst_interval, cctx );
+            const int shown = std::min( m.qty, BURST_MAX_ROWS );
+            const BurstResult b = fire_burst( g, g_ch, ammo, start, shown );
+            sc.burst_start_recoil = start;
+            sc.burst_shot_recoil  = b.shot_recoil;
+            sc.burst_end_recoil   = b.recoil_after;
+            sc.burst_shown        = shown;
+
+            for( double rec : b.shot_recoil ) {
+                if( rec > MAX_RECOIL ) {
+                    sc.burst_over_cap = true;
                 }
-            } else {
-                flat = 0;
             }
 
-            for( int i = 0; i < TURN && recoil > cctx.limit; i++ ) {
-                const double amt = aim_per_move( g, g_ch, recoil, cctx );
-                if( amt <= 0 ) {
-                    break;
+            // 每发「好击及以上」的概率。
+            //
+            // ★ 放在这里（缓存里算一次）而不是绘图函数里 —— 绘图每帧都跑，
+            //   而每发要采样。虽然 N 比概率表小得多（表里 20 万），但乘上
+            //   最多 12 发还是会卡。实测 20 万次采样约 25ms。
+            std::mt19937 rng( PROB_SEED );
+            std::vector<double> samples( BURST_PROB_N );
+            sc.burst_goodplus.reserve( b.shot_recoil.size() );
+            for( double rec : b.shot_recoil ) {
+                for( int k = 0; k < BURST_PROB_N; k++ ) {
+                    samples[k] = roll_dispersion( g, g_ch, ammo, rec, rng );
                 }
-                recoil = std::max( cctx.limit, recoil - amt );
+                long good = 0;
+                for( int k = 0; k < BURST_PROB_N; k++ ) {
+                    if( missed_by( samples[k], BURST_REF_DIST, PROB_TARGET ) < ACC_GOODHIT ) {
+                        good++;
+                    }
+                }
+                sc.burst_goodplus.push_back( (double)good / BURST_PROB_N );
             }
         }
+        g_detail.sustained.push_back( std::move( sc ) );
     }
 
     store_key( g_detail );
@@ -1019,8 +1135,10 @@ void draw_aim_timeline( const DetailCache &d )
     //   必须靠绝对高度把它们拉开 —— 绘图区高度 = height - 88（上下边距）。
     //   300px 高时三条线离底边只有 22 / 8 / 3.5 像素，几乎重叠；
     //   560px 高（绘图区 472px）则拉开到 55 / 20 / 8.5 像素，能分得清。
-    draw_line_chart( "##recoil_curve", d.recoil_curve,
-                     { zh::g::AXIS_RECOIL, zh::g::RECOIL_TIP, "%.0f", &marks, 7, 560.0f } );
+    const std::vector<ChartSeries> series = { { "", d.recoil_curve, COLOR_FIRST } };
+    // 单线图，series 名字留空 → 悬停时用纵轴名当标签
+    draw_line_chart( "##recoil_curve", series,
+                     { zh::g::AXIS_RECOIL, "", "%.0f", &marks, 7, 560.0f } );
 }
 
 // 通用折线图：X 轴固定是「瞄准回合」，Y 轴由调用方给名字和格式。
@@ -1030,17 +1148,19 @@ void draw_aim_timeline( const DetailCache &d )
 //
 // 坐标轴、网格、折线、填充、刻度取整、参考线、悬停提示都在这一个函数里，
 // 两个图（瞄准收益曲线、瞄准时间线的误差曲线）共用。
-void draw_line_chart( const char *id, const std::vector<double> &data,
+void draw_line_chart( const char *id, const std::vector<ChartSeries> &series,
                       const ChartOpts &opts )
 {
-    const int N = (int)data.size();
+    if( series.empty() ) {
+        return;
+    }
+    const int N = (int)series[0].data.size();
     if( N < 2 ) {
         return;
     }
 
     const char *y_label = opts.y_label;
     const char *y_fmt   = opts.y_fmt;
-    const char *tip_fmt = opts.tip_fmt;
     const std::vector<ChartMark> &marks =
         opts.marks ? *opts.marks : std::vector<ChartMark>{};
 
@@ -1062,8 +1182,10 @@ void draw_line_chart( const char *id, const std::vector<double> &data,
 
     // Y 轴范围要把参考线也框进来，否则阈值线会画到图外面
     double maxY = 1.0;
-    for( double v : data ) {
-        maxY = std::max( maxY, v );
+    for( const ChartSeries &s : series ) {
+        for( double v : s.data ) {
+            maxY = std::max( maxY, v );
+        }
     }
     for( const ChartMark &m : marks ) {
         maxY = std::max( maxY, m.y );
@@ -1082,9 +1204,6 @@ void draw_line_chart( const char *id, const std::vector<double> &data,
     const ImU32 col_grid = ImGui::GetColorU32( ImGuiCol_Border, 0.7f );
     const ImU32 col_axis = ImGui::GetColorU32( ImGuiCol_Text, 0.45f );
     const ImU32 col_text = ImGui::GetColorU32( ImGuiCol_Text, 0.60f );
-    const ImU32 col_line = IM_COL32( 100, 180, 255, 255 );
-    const ImU32 col_fill = IM_COL32( 100, 180, 255, 40 );
-    const ImU32 col_dot  = IM_COL32( 170, 215, 255, 255 );
     const ImU32 col_mark = IM_COL32( 235, 170, 80, 220 );
 
     dl->AddRectFilled( a, b, col_bg );
@@ -1112,19 +1231,33 @@ void draw_line_chart( const char *id, const std::vector<double> &data,
     dl->AddLine( ImVec2( a.x, b.y ), ImVec2( b.x, b.y ), col_axis, 1.5f );
     dl->AddLine( ImVec2( a.x, a.y ), ImVec2( a.x, b.y ), col_axis, 1.5f );
 
-    // 折线 + 下面垫一层半透明填充
-    std::vector<ImVec2> pts;
-    pts.reserve( N );
-    for( int t = 0; t < N; t++ ) {
-        pts.emplace_back( px( t ), py( data[t] ) );
-    }
-    for( int t = 0; t + 1 < N; t++ ) {
-        dl->AddQuadFilled( pts[t], pts[t + 1],
-                           ImVec2( pts[t + 1].x, b.y ), ImVec2( pts[t].x, b.y ), col_fill );
-    }
-    dl->AddPolyline( pts.data(), N, col_line, ImDrawFlags_None, 2.0f );
-    for( const ImVec2 &p : pts ) {
-        dl->AddCircleFilled( p, 3.0f, col_dot );
+    // 折线。多条线时不画填充 —— 半透明色块互相叠加会糊成一片，
+    // 反而看不清谁是谁。单条线时垫一层，看着有分量。
+    const bool fill = ( series.size() == 1 );
+    std::vector<std::vector<ImVec2>> all_pts;
+    all_pts.reserve( series.size() );
+
+    for( const ChartSeries &s : series ) {
+        std::vector<ImVec2> pts;
+        pts.reserve( N );
+        for( int t = 0; t < N; t++ ) {
+            pts.emplace_back( px( t ), py( s.data[t] ) );
+        }
+
+        if( fill ) {
+            const ImU32 col_fill = ( s.color & 0x00FFFFFF ) | ( 40u << 24 );
+            for( int t = 0; t + 1 < N; t++ ) {
+                dl->AddQuadFilled( pts[t], pts[t + 1],
+                                   ImVec2( pts[t + 1].x, b.y ), ImVec2( pts[t].x, b.y ),
+                                   col_fill );
+            }
+        }
+
+        dl->AddPolyline( pts.data(), N, s.color, ImDrawFlags_None, 2.0f );
+        for( const ImVec2 &p : pts ) {
+            dl->AddCircleFilled( p, 3.0f, s.color );
+        }
+        all_pts.push_back( std::move( pts ) );
     }
 
     // 参考横线。标签不画在线上 —— 阈值通常远小于纵轴上限（比如 348 / 127 / 54
@@ -1138,32 +1271,52 @@ void draw_line_chart( const char *id, const std::vector<double> &data,
         dl->AddLine( ImVec2( a.x, y ), ImVec2( b.x, y ), col_mark, 1.5f );
     }
 
-    if( !marks.empty() ) {
-        // 图例里带数值，省得再去对上面那行「档位阈值：…」的文字。
-        // ★ 用 (int) 截断而不是 %.0f —— 阈值是小数（比如 348.6），
-        //   四舍五入会显示成 349，和上面那行（用截断）差一个数，看着像 bug。
-        std::vector<std::string> entries;
-        float lw = 0.0f;
+    // 右上角图例：先列曲线，再列参考横线。
+    //
+    // 参考线的标签不画在线上 —— 阈值通常远小于纵轴上限（348 / 127 / 54 对
+    // 3000），三条线全挤在最下面一截，各自带标签会叠成一团。
+    // 右上角一定是空的：本项目的曲线都是从左上降到右下。
+    //
+    // ★ 参考线数值用 (int) 截断而不是 %.0f —— 阈值是小数（348.6），
+    //   四舍五入会显示成 349，和别处（用截断）差一个数，看着像 bug。
+    {
+        struct LegendItem {
+            std::string text;
+            ImU32       color;
+        };
+        std::vector<LegendItem> items;
+        for( const ChartSeries &s : series ) {
+            if( !s.name.empty() ) {
+                items.push_back( { s.name, s.color } );
+            }
+        }
         for( const ChartMark &m : marks ) {
-            entries.push_back( fmt_str( zh::g::LEGEND_FMT, m.label, (int)m.y ) );
-            lw = std::max( lw, ImGui::CalcTextSize( entries.back().c_str() ).x );
+            items.push_back( { fmt_str( zh::g::LEGEND_FMT, m.label, (int)m.y ), col_mark } );
         }
 
-        const float lineH = ImGui::GetTextLineHeight();
-        const float pad   = 6.0f, swatch = 16.0f;
-        const ImVec2 p0( b.x - lw - swatch - pad * 3.0f, a.y + pad );
-        const ImVec2 p1( b.x - pad, p0.y + lineH * (float)entries.size() + pad * 2.0f );
+        if( !items.empty() ) {
+            float lw = 0.0f;
+            for( const LegendItem &it : items ) {
+                lw = std::max( lw, ImGui::CalcTextSize( it.text.c_str() ).x );
+            }
 
-        dl->AddRectFilled( p0, p1, IM_COL32( 16, 16, 20, 215 ), 3.0f );
-        dl->AddRect( p0, p1, col_grid, 3.0f );
+            const float lineH = ImGui::GetTextLineHeight();
+            const float pad   = 6.0f, swatch = 16.0f;
+            const ImVec2 p0( b.x - lw - swatch - pad * 3.0f, a.y + pad );
+            const ImVec2 p1( b.x - pad, p0.y + lineH * (float)items.size() + pad * 2.0f );
 
-        float ty = p0.y + pad;
-        for( const std::string &e : entries ) {
-            const float cy = ty + lineH * 0.5f;
-            dl->AddLine( ImVec2( p0.x + pad, cy ), ImVec2( p0.x + pad + swatch, cy ),
-                         col_mark, 2.0f );
-            dl->AddText( ImVec2( p0.x + pad + swatch + pad, ty ), col_mark, e.c_str() );
-            ty += lineH;
+            dl->AddRectFilled( p0, p1, IM_COL32( 16, 16, 20, 215 ), 3.0f );
+            dl->AddRect( p0, p1, col_grid, 3.0f );
+
+            float ty = p0.y + pad;
+            for( const LegendItem &it : items ) {
+                const float cy = ty + lineH * 0.5f;
+                dl->AddLine( ImVec2( p0.x + pad, cy ), ImVec2( p0.x + pad + swatch, cy ),
+                             it.color, 2.0f );
+                dl->AddText( ImVec2( p0.x + pad + swatch + pad, ty ), it.color,
+                             it.text.c_str() );
+                ty += lineH;
+            }
         }
     }
 
@@ -1172,13 +1325,29 @@ void draw_line_chart( const char *id, const std::vector<double> &data,
         int t = (int)std::lround( ( mouse.x - a.x ) / ( b.x - a.x )
                                   * (float)std::max( 1, N - 1 ) );
         t = std::max( 0, std::min( N - 1, t ) );
-        const ImVec2 p = pts[t];
+        const ImVec2 p( px( t ), a.y );
         dl->AddLine( ImVec2( p.x, a.y ), ImVec2( p.x, b.y ),
                      ImGui::GetColorU32( ImGuiCol_Text, 0.3f ) );
-        dl->AddCircleFilled( p, 5.0f, col_line );
 
+        // 每条线各标一个点、各报一个数 —— 多条线时只报一条没法比。
+        //
+        // ★ 这里用的是**字面量**格式串，不是从 opts 传进来的变量。
+        //   之前传变量（"%d 回合\n%.0f 格"），改成「每条线一行」后忘了同步改，
+        //   结果 %d 把字符串指针当整数打印，提示里出现 -459279152 这种鬼数字。
+        //   字面量的话编译器能查，而且少一处要同步维护的东西。
         ImGui::BeginTooltip();
-        ImGui::TextUnformatted( fmt_str( tip_fmt, t, data[t] ).c_str() );
+        ImGui::Text( zh::g::TIP_TURN, t );
+        for( const ChartSeries &s : series ) {
+            dl->AddCircleFilled( ImVec2( px( t ), py( s.data[t] ) ), 5.0f, s.color );
+            const char *label = s.name.empty() ? y_label : s.name.c_str();
+            if( s.color != 0 ) {
+                ImGui::PushStyleColor( ImGuiCol_Text, s.color );
+                ImGui::Text( "%s  %.0f%s", label, s.data[t], opts.y_unit );
+                ImGui::PopStyleColor();
+            } else {
+                ImGui::Text( "%s  %.0f%s", label, s.data[t], opts.y_unit );
+            }
+        }
         ImGui::EndTooltip();
     }
 
@@ -1192,6 +1361,102 @@ void draw_line_chart( const char *id, const std::vector<double> &data,
     }
 }
 
+// 卡壳警告：选中的弹药「推不动这把枪的循环」时弹一条醒目的。
+//
+// ★ 游戏里卡壳**不会**中断当前这一轮连发。min_cycle_recoil 那段代码明确
+//   不返回 false（注释就写着 "Don't return false in this case"），而且
+//   fault_gun_chamber_spent 在 0.I 全源码里只出现 3 次 —— 声明、判定、设置，
+//   **没有任何地方检查它来阻止开火**。真正的代价在后面：之后每次想开火，
+//   瞄准活动入口（activity_actor.cpp:352）会先扣约一回合的行动点、把 recoil
+//   重置回 MAX_RECOIL（瞄准进度清零），再有 1/max(7, 15-4×枪械技能) 的概率
+//   当场修好，修不好这次开火就作废。
+//
+//   所以这条警告不改任何算出来的数，只是告诉玩家「这么配弹药会很难受」。
+void draw_jam_warning( const Gun &g, const Ammo *ammo )
+{
+    if( ammo == nullptr || !g.can_jam || g.min_cycle_recoil <= 0.0 ) {
+        return;                       // 这枪压根不会卡（转轮/手动枪机/发射器）
+    }
+    if( ammo->recoil >= g.min_cycle_recoil ) {
+        return;                       // 后坐力够，推得动
+    }
+
+    ImGui::PushStyleColor( ImGuiCol_Text, IM_COL32( 255, 140, 110, 255 ) );
+    ImGui::PushTextWrapPos( 0.0f );
+    ImGui::TextUnformatted( fmt_str( zh::g::JAM_TITLE_FMT, (int)ammo->recoil,
+                                     (int)g.min_cycle_recoil ).c_str() );
+    ImGui::PopTextWrapPos();
+    ImGui::PopStyleColor();
+    note( "%s", zh::g::JAM_DETAIL );
+}
+
+// 逐发明细：连发模式下一轮里每一发能打多远。
+//
+// 只负责显示 —— 所有数值（含每发的概率）都在 compute_detail 里算好缓存了。
+// 概率不能放这儿算：绘图每帧都跑，而每发都要采样。
+void draw_burst_table( const DetailCache &d )
+{
+    for( const DetailCache::SustainedCurve &sc : d.sustained ) {
+        if( sc.qty <= 1 || sc.burst_shot_recoil.empty() ) {
+            continue;
+        }
+
+        ImGui::Spacing();
+        ImGui::TextUnformatted(
+            fmt_str( zh::g::BURST_HDR_FMT, sc.qty, d.burst_interval,
+                     sc.burst_start_recoil ).c_str() );
+
+        ImGui::PushID( sc.qty );
+        if( ImGui::BeginTable( "burst", 4,
+                               ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV ) ) {
+            ImGui::TableSetupColumn( zh::g::COL_SHOT_NO, ImGuiTableColumnFlags_WidthStretch );
+            ImGui::TableSetupColumn( zh::g::COL_RECOIL, ImGuiTableColumnFlags_WidthFixed, 100 );
+            ImGui::TableSetupColumn( zh::g::COL_50RANGE, ImGuiTableColumnFlags_WidthFixed, 120 );
+            ImGui::TableSetupColumn( zh::g::COL_GOODPLUS, ImGuiTableColumnFlags_WidthFixed, 140 );
+            ImGui::TableHeadersRow();
+
+            for( size_t i = 0; i < sc.burst_shot_recoil.size(); i++ ) {
+                const double rec = sc.burst_shot_recoil[i];
+                const int rng_tiles =
+                    range_with_even_chance_of_good_hit( d.fixed_disp + rec );
+
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::Text( zh::g::SHOT_NO_FMT, (int)i + 1 );
+                ImGui::TableNextColumn(); ImGui::Text( "%d", (int)rec );
+                ImGui::TableNextColumn();
+                if( rng_tiles >= 59 ) ImGui::TextUnformatted( zh::g::OVER_TABLE );
+                else                  ImGui::Text( zh::g::TILE_FMT, rng_tiles );
+                ImGui::TableNextColumn();
+                if( i < sc.burst_goodplus.size() ) {
+                    ImGui::Text( "%.1f%%", 100.0 * sc.burst_goodplus[i] );
+                }
+            }
+            ImGui::EndTable();
+        }
+        ImGui::PopID();
+
+        if( sc.burst_shown < sc.qty ) {
+            ImGui::TextDisabled( zh::g::BURST_TRUNC, sc.qty - sc.burst_shown );
+        }
+        // 连发中途的误差可以超过 3000 —— 上限只在打完一轮时才生效
+        if( sc.burst_over_cap ) {
+            note( "%s", zh::g::BURST_OVER_CAP );
+        }
+    }
+}
+
+// 有没有连发模式（一轮多发）—— 没有的话就不用显示逐发明细那一套
+bool has_multi_shot( const DetailCache &d )
+{
+    for( const DetailCache::SustainedCurve &sc : d.sustained ) {
+        if( sc.qty > 1 && !sc.burst_shot_recoil.empty() ) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // 瞄准收益曲线：横轴 = 瞄准回合，纵轴 = 50%好击距离
 void draw_range_curve( const DetailCache &d )
 {
@@ -1199,9 +1464,38 @@ void draw_range_curve( const DetailCache &d )
         return;
     }
     note( "%s", zh::g::CURVE_HINT );
-    // 纵轴只有 0~4 格，不需要太高
-    draw_line_chart( "##range_curve", d.curve,
-                     { zh::g::AXIS_RANGE, zh::g::CURVE_TIP, "%.0f", nullptr, 5, 300.0f } );
+    note( "%s", zh::g::SUSTAINED_HINT );
+
+    // 三条线（或更多）画在同一张图上：
+    //   首次开火 —— 冷启动，就是左边那条 d.curve
+    //   每个射击模式一条「持续」，即反复「瞄 N 回合 → 开火」稳定下来的水平
+    const ImU32 palette[] = { COLOR_SUST_1, COLOR_SUST_2, COLOR_SUST_3 };
+    std::vector<ChartSeries> series;
+    series.push_back( { zh::g::LINE_FIRST, d.curve, COLOR_FIRST } );
+    for( size_t i = 0; i < d.sustained.size(); i++ ) {
+        series.push_back( { d.sustained[i].label, d.sustained[i].range,
+                            palette[i % 3] } );
+    }
+
+    draw_line_chart( "##range_curve", series,
+                     { zh::g::AXIS_RANGE, " 格", "%.0f", nullptr, 5, 340.0f } );
+
+    // 逐发明细的间隔控件。放在这儿是为了让它和图的横轴对上 ——
+    // 图上看中哪个位置，把间隔调过去就能看那一轮的逐发明细。
+    if( has_multi_shot( d ) ) {
+        ImGui::Spacing();
+        ImGui::TextUnformatted( zh::g::BURST_INTERVAL );
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth( 90 );
+        // 用 InputInt（带 +/- 按钮）而不是 Slider：拖动条每帧都在变，
+        // 每次变都要重算整套（含 12 发 × 2 万次采样），会卡。
+        ImGui::InputInt( "##burst_interval", &g_burst_interval, 1, 1 );
+        ImGui::SameLine();
+        ImGui::TextDisabled( "%s", zh::g::BURST_TURNS );
+        g_burst_interval = std::max( 0, std::min( CURVE_MAX_TURNS, g_burst_interval ) );
+
+        draw_burst_table( d );
+    }
 }
 
 // 瞄准档位实例
@@ -1308,6 +1602,7 @@ void draw_detail()
     const Ammo *ammo = current_ammo();
 
     draw_detail_header( g );
+    draw_jam_warning( g, ammo );      // 放在最上面：它影响下面所有数字的可信度
     if( ammo == nullptr ) {
         // 模块化枪械没装机匣时没有口径，但配件还是要能装 —— 装备区不能藏
         ImGui::Spacing();
@@ -1316,7 +1611,7 @@ void draw_detail()
         return;
     }
 
-    if( !key_matches( g_detail ) ) {
+    if( !key_matches_detail( g_detail ) ) {
         compute_detail( g, ammo );
     }
 

@@ -28,7 +28,9 @@ param(
     [string]$Out     = "gui.png",
     [int]   $WaitSec = 7,      # 启动后等多久再截图（等字体加载和首帧渲染）
     [string]$AppArg  = "",     # 透传给 exe 的关键词，例：-AppArg "AKM"
-    [int]   $Scroll  = 0       # 滚轮格数，正数向下。窗口没焦点时无效
+    [int]   $Scroll  = 0,      # 滚轮格数，正数向下。窗口没焦点时无效
+    [double]$HoverX  = -1,     # 把光标放到窗口内的这个横向比例（0~1），用于截悬停提示
+    [double]$HoverY  = -1      # 纵向比例。两个都给了才会移动光标
 )
 
 $ErrorActionPreference = "Stop"
@@ -103,6 +105,17 @@ $ht = $r.Bottom - $r.Top
 Write-Host "size=${w}x${ht} at ($($r.Left),$($r.Top))"
 
 if ($w -le 0 -or $ht -le 0) { Write-Host "窗口尺寸为 0"; $p | Stop-Process -Force; exit 3 }
+
+if ($HoverX -ge 0 -and $HoverY -ge 0) {
+    # 把光标放到窗口内指定比例处。用来截悬停提示 —— 提示只在鼠标压住控件时出现。
+    # 注意窗口能不能拿到焦点是不确定的（SetForegroundWindow 有时会失败），
+    # 焦点状态会影响 ImGui 认不认这个位置，所以同一个位置也可能时灵时不灵。
+    $hx = $r.Left + [int]($w * $HoverX)
+    $hy = $r.Top + [int]($ht * $HoverY)
+    [void][Cap]::SetCursorPos( $hx, $hy )
+    Write-Host "hover at ($hx,$hy)"
+    Start-Sleep -Milliseconds 800
+}
 
 if ($Scroll -ne 0) {
     # 光标移到详情面板上，滚轮才滚得动那个子区域

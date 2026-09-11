@@ -32,7 +32,7 @@ void add_gun( const char *id, const char *name, const char *name_en, const char 
               std::initializer_list<const char *> aliases_zh,
               std::initializer_list<const char *> aliases_en,
               std::initializer_list<GunMode> modes,
-              bool reload_and_shoot,
+              bool reload_and_shoot, bool can_jam,
               const char *source )
 {
     Gun g;
@@ -52,6 +52,7 @@ void add_gun( const char *id, const char *name, const char *name_en, const char 
     g.barrel_length_mm = barrel_length_mm;
     g.disable_sights   = disable_sights;
     g.reload_and_shoot = reload_and_shoot;
+    g.can_jam          = can_jam;
     g.source           = source ? source : "core";
 
     for( const GunMode &m : modes ) {

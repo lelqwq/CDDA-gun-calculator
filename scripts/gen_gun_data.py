@@ -389,11 +389,20 @@ def main():
                        else "semi-auto")
             modes.insert(0, ("DEFAULT", defmode, 1))
 
+        # 能不能卡壳：取决于该枪有没有可能产生 fault_gun_chamber_spent。
+        # 转轮手枪、手动枪机、发射器这些没有这个故障（弹巢/枪机不靠子弹
+        # 后坐力带动），所以永远不会「循环不到位」。
+        # ★ faults 是数组字段，copy-from 时是**派生覆盖基类**而不是累加，
+        #   resolve() 的 _merge 正好是这个语义，所以直接取解析后的值。
+        faults = r.get("faults") or []
+        can_jam = any(isinstance(x, dict) and x.get("fault") == "fault_gun_chamber_spent"
+                      for x in faults)
+
         mode_list = ", ".join("{ %s, %s, %d }" % (cstr(m[0]), cstr(m[1]), m[2])
                               for m in modes)
 
         lines.append(
-            '    add_gun(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, { %s }, %s, %s);'
+            '    add_gun(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, { %s }, %s, %s, %s);'
             % (
                 cstr(oid), cstr(name_zh), cstr(name_en), cstr(skill),
                 fnum(parse_unit(r.get("dispersion"), {}, 0)),
@@ -412,6 +421,7 @@ def main():
                 mode_list,
                 # 弓弩/投石索打完 recoil 直接回满，不参与连射累积
                 "true" if "RELOAD_AND_SHOOT" in gflags else "false",
+                "true" if can_jam else "false",
                 cstr(db.src_of.get(oid, "core")),
             ))
         n_multi += 1 if any(m[2] > 1 for m in modes) else 0
@@ -419,7 +429,7 @@ def main():
     gun_field_note = ("id, name, name_en, skill, dispersion, sight_dispersion, handling, "
                       "durability, recoil, weight_g, volume_ml, longest_side_mm, "
                       "min_cycle_recoil, barrel_length_mm, disable_sights, ammo_types, mod_slots, "
-                      "aliases_zh, aliases_en, modes, reload_and_shoot, source")
+                      "aliases_zh, aliases_en, modes, reload_and_shoot, can_jam, source")
     path = os.path.join(args.out, "gen_guns.cpp")
     with io.open(path, "w", encoding="utf-8", newline="\n") as f:
         f.write(HEADER % ("gen_guns.cpp  生成的枪械数据", "core" if not mods else "core + " + ",".join(mods),

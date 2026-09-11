@@ -121,6 +121,11 @@ struct Gun {
     // 不参与「连射累积」。0.I ranged.cpp:1225-1227
     bool        reload_and_shoot = false;
 
+    // 该枪有没有可能产生 fault_gun_chamber_spent（「弹壳卡在膛里」）。
+    // 只有它才有可能「循环不到位」—— 转轮、手动枪机、发射器这些没有这个
+    // 故障，低后坐力弹也照打不误。判定见 0.I ranged.cpp:852-855。
+    bool        can_jam = false;
+
     std::vector<GunMode> modes;            // 射击模式，至少一个（DEFAULT）
 
     std::vector<std::string> ammo_types;   // 可用的口径（模块化枪械为空，口径来自配件）
@@ -189,7 +194,7 @@ void add_gun( const char *id, const char *name, const char *name_en, const char 
               std::initializer_list<const char *> aliases_zh,
               std::initializer_list<const char *> aliases_en,
               std::initializer_list<GunMode> modes,
-              bool reload_and_shoot,
+              bool reload_and_shoot, bool can_jam,
               const char *source );
 
 void add_ammo( const char *id, const char *name, const char *name_en, const char *ammo_type,

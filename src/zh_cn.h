@@ -109,6 +109,24 @@ inline std::string slot( const std::string &key )
     return key;
 }
 
+// 射击模式名（游戏 JSON 里 modes 的第二个元素）
+//
+//  译文取自游戏 .mo 对同名 key 的翻译 —— 游戏自己也是拿这串去查表的。
+//  有些枪没有 modes，由加载器补默认模式，名字见脚本里的 defmode_name()。
+inline std::string mode_name( const std::string &key )
+{
+    if( key == "semi-auto" )  return "半自动";
+    if( key == "auto" )       return "全自动";
+    if( key == "burst" )      return "短连发";
+    if( key == "single" )     return "单发";
+    if( key == "revolver" )   return "左轮手枪";
+    if( key == "double" )     return "双发齐射";
+    if( key == "manual" )     return "手动";
+    if( key == "low auto" )   return "低速全自动";
+    if( key == "high auto" )  return "高速全自动";
+    return key;               // 例如 "3 rd."，游戏译作「三连发」，查不到就原样显示
+}
+
 // 命中档位的名字。参数是「未命中度」换算出来的档位序号，0 最准、5 脱靶。
 inline const char *hit_tier_short( int tier )
 {
@@ -170,25 +188,54 @@ inline const char *SEC_GAMEVAL  = "游戏内显示值";
 inline const char *SEC_AIMLEVEL = "瞄准等级";
 inline const char *SEC_TIMELINE = "瞄准时间线";
 inline const char *SEC_INSTANCE = "瞄准档位实例";
-inline const char *SEC_CURVE    = "瞄准收益曲线";
+inline const char *SEC_CURVE    = "瞄准收益与连射";
 inline const char *SEC_PROB     = "命中档位概率";
+
+// ---- 连射（持续射击）----
+// 曲线图里每条线的名字
+inline const char *LINE_FIRST    = "首次开火";              // 冷启动那条
+inline const char *MODE_FMT_1    = "%s持续";                // 一次一发：「半自动持续」
+inline const char *MODE_FMT_N    = "%s持续（%d 发）";        // 连发：「全自动持续（4 发）」
+
+inline const char *TIP_TURN      = "%d 回合";
+inline const char *SUSTAINED_HINT =
+    "「持续」= 反复「瞄这么多回合 → 开火」稳定下来的水平。它比「首次开火」准 —— 战斗刚开始时瞄准误差初值就是满的 3000，之后每轮只需从上一发打完的状态恢复。全自动那条若与「首次开火」重合，说明每轮后坐力都顶到了上限，等于每轮都从零开始";
+
+// 逐发明细表
+inline const char *BURST_HDR_FMT  = "本轮 %d 发（两发之间瞄 %d 回合，稳态下开火时误差 %.0f）";
+inline const char *BURST_INTERVAL = "逐发明细的间隔";
+inline const char *BURST_TURNS    = " 回合";
+inline const char *COL_SHOT_NO    = "第几发";
+// 「好击及以上」跟距离强相关（1 格约九成、40 格几乎为零），必须标出按多远算的
+inline const char *COL_GOODPLUS   = "好击及以上 @10格";
+inline const char *SHOT_NO_FMT    = "第 %d 发";
+inline const char *BURST_TRUNC    = "（后面还有 %d 发没列出）";
+inline const char *BURST_OVER_CAP =
+    "注意：连发中途的瞄准误差会超过 3000 —— 上限只在打完一轮时才生效（游戏源码就是这样，命中判定用的是没截断的值）";
+
+// 卡壳警告。★ 游戏里卡壳**不会**中断当前这一轮连发，代价在后面：
+//   之后每次想开火，都要先花约一回合清障、瞄准进度清零、还有大概率失败。
+// 注意两个占位符都是 %d（传进来的是 (int)），别写成 %.0f
+inline const char *JAM_TITLE_FMT = "⚠ 这种弹药（recoil %d）推不动这把枪的循环（需要 %d），开火后会卡壳";
+inline const char *JAM_DETAIL =
+    "游戏判定：弹药的 recoil 低于枪的 min_cycle_recoil 时，开火之后枪会挂上「Spent casing in chamber」故障。此后每次想开火都要先花约一回合清障，瞄准进度直接清零（瞄准误差被重置回 3000），而且只有 1/7 ~ 1/15 的概率当场修好，修不好这次开火就白费。换一款后坐力够的弹药，否则连射基本没法用";
 
 // 瞄准收益曲线（图形版用 ImDrawList 手绘，不是 ImPlot）
 //
-// ★ 注意这个文件里两类字符串的区别：
-//   - 走 note("%s", X) / TextUnformatted(X) 传的是**字面量**，百分号就写一个 %；
-//   - 直接当 printf 格式串用的（比如下面的 CURVE_TIP），转义百分号才写 %%。
-//   写错了不会报错，只会在界面上多出一个百分号。
+// ★ 这个文件里的字符串分两类，别搞混：
+//   - 走 note("%s", X) / TextUnformatted(X) / AddText(X) 传的是**字面量**，
+//     百分号就写一个 %（比如下面的 CURVE_HINT）；
+//   - 当 printf 格式串用的才写 %%，而且**实参类型必须对得上**。
+//   第二类尤其小心：格式串是变量时编译器查不了（GCC 只查字面量），
+//   类型写错了不报错、只是值变鬼数字。本项目已经踩过两次了。
 inline const char *CURVE_HINT   =
     "横轴 = 瞄准回合（1 回合 = 100 行动点），纵轴 = 50%好击距离。曲线到顶后就白瞄了 —— 瞄准误差压到精度下限便再也降不下去。鼠标移到图上可看具体数值";
 inline const char *AXIS_TURN    = "瞄准回合";
 inline const char *AXIS_RANGE   = "50%好击距离（格）";
-inline const char *CURVE_TIP    = "%d 回合\n%.0f 格";
 
 // 瞄准时间线里的那张图：纵轴换成瞄准误差本身
 inline const char *AXIS_RECOIL   = "瞄准误差";
 inline const char *LEGEND_FMT    = "%s %d";     // 图例里的一条：档位名 + 阈值（截断，与上方「档位阈值」那行一致）
-inline const char *RECOIL_TIP    = "%d 回合\n瞄准误差 %.0f";
 // 这一节现在只剩这一句说明 + 一张图。原本还列着「压到X档 N 行动点」三行、
 // 「一回合后降到 N」和档位阈值 —— 那些数字与上面「瞄准等级」表里的「瞄准用时」
 // 是同一组，档位阈值也已进了图例，删掉免得把同一组数字说三遍。
