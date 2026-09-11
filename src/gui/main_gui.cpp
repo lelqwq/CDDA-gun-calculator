@@ -1571,10 +1571,13 @@ void draw_line_chart( const char *id, const std::vector<ChartSeries> &series,
         ImGui::InvisibleButton( grip_id.c_str(), ImVec2( W, 7.0f ) );
         const bool gact = ImGui::IsItemActive();
         const bool ghov = ImGui::IsItemHovered();
+        // ★ clamp 必须只在拖动时做。view.height 的初值 0 是「用 opts.height」
+        //   的哨兵，无条件 clamp 会在第一帧就把它夹成下限（140），
+        //   于是所有图都变成最矮的——踩过这个坑。
         if( gact ) {
-            view.height = H + ImGui::GetIO().MouseDelta.y;
+            view.height = std::clamp( H + ImGui::GetIO().MouseDelta.y,
+                                      140.0f, 1400.0f );
         }
-        view.height = std::clamp( view.height, 140.0f, 1400.0f );
         if( gact || ghov ) {
             ImGui::SetMouseCursor( ImGuiMouseCursor_ResizeNS );
         }
