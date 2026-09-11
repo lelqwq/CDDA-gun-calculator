@@ -323,6 +323,11 @@ inline const char *CLEAR        = "清空";
 inline const char *COUNT_FMT    = "%d / %d 把";
 inline const char *PICK_GUN     = "从左边选一把枪";
 
+// 技能筛选下拉框。两个都走 fmt_str 格式化，所以百分号写一个
+inline const char *SKILL_FILTER = "技能";
+inline const char *SKILL_ALL_FMT  = "全部（%d）";
+inline const char *SKILL_ITEM_FMT = "%s（%d）";
+
 // 人物参数（详情里所有数字都随这几个值变）
 inline const char *P_DEX        = "敏捷";
 inline const char *P_PER        = "感知";

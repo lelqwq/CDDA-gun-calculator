@@ -102,6 +102,14 @@ int              g_selected = -1;         // 当前选中的枪械下标
 int  g_sort_col  = -1;
 bool g_sort_desc = false;
 
+// 技能筛选。-1 = 全部；否则是 g_skill_keys 的下标。
+// 和搜索框是「与」的关系：先按关键词搜，再按技能过滤。
+//
+// 只在图形版做 —— 命令行版保持原样，它在终端里靠关键词已经够用了。
+std::vector<std::string> g_skill_keys;     // 数据里实际出现的技能（逻辑键）
+std::vector<int>         g_skill_counts;   // 各自的枪械总数
+int                      g_skill_filter = -1;
+
 // 选中枪械的工作副本。装/卸配件改的是它，g_guns 那份只读数据库保持原样 ——
 // 否则换个枪再换回来，之前装的配件会「粘」在数据库上。
 Gun g_work;
@@ -395,10 +403,63 @@ void apply_sort()
     } );
 }
 
+// 建技能索引：扫一遍数据库，统计每种技能有多少把枪。
+// 顺序按数量降序 —— 下拉框里最常用的（步枪 161 把）排最前，好找。
+void build_skill_index()
+{
+    for( const Gun &g : g_guns ) {
+        size_t i = 0;
+        for( ; i < g_skill_keys.size(); i++ ) {
+            if( g_skill_keys[i] == g.skill ) {
+                g_skill_counts[i]++;
+                break;
+            }
+        }
+        if( i == g_skill_keys.size() ) {
+            g_skill_keys.push_back( g.skill );
+            g_skill_counts.push_back( 1 );
+        }
+    }
+
+    // 数量降序；数量相同按显示名，保证顺序稳定，不会每次启动都不一样
+    std::vector<size_t> order( g_skill_keys.size() );
+    for( size_t i = 0; i < order.size(); i++ ) {
+        order[i] = i;
+    }
+    std::stable_sort( order.begin(), order.end(), []( size_t a, size_t b ) {
+        if( g_skill_counts[a] != g_skill_counts[b] ) {
+            return g_skill_counts[a] > g_skill_counts[b];
+        }
+        return zh::skill( g_skill_keys[a] ) < zh::skill( g_skill_keys[b] );
+    } );
+
+    std::vector<std::string> keys;
+    std::vector<int>         counts;
+    keys.reserve( order.size() );
+    counts.reserve( order.size() );
+    for( size_t i : order ) {
+        keys.push_back( g_skill_keys[i] );
+        counts.push_back( g_skill_counts[i] );
+    }
+    g_skill_keys.swap( keys );
+    g_skill_counts.swap( counts );
+}
+
 void refresh_hits()
 {
     g_hits = search_guns( g_search );
-    apply_sort();                    // 换了关键词要按当前排序列重新排
+
+    // 技能筛选在搜索之后做 —— 两者是「与」
+    if( g_skill_filter >= 0 && g_skill_filter < (int)g_skill_keys.size() ) {
+        const std::string &want = g_skill_keys[g_skill_filter];
+        g_hits.erase( std::remove_if( g_hits.begin(), g_hits.end(),
+                                      [&want]( int i ) {
+                                          return g_guns[i].skill != want;
+                                      } ),
+                      g_hits.end() );
+    }
+
+    apply_sort();                    // 换了关键词/筛选要按当前排序列重新排
 }
 
 // ---- 缓存计算 ---------------------------------------------------------------
@@ -514,6 +575,39 @@ void draw_toolbar()
     }
     ImGui::SameLine();
     ImGui::TextDisabled( zh::g::COUNT_FMT, (int)g_hits.size(), (int)g_guns.size() );
+
+    // 技能筛选下拉框
+    ImGui::SameLine( 0, GAP * 2 );
+    ImGui::TextUnformatted( zh::g::SKILL_FILTER );
+    ImGui::SameLine();
+
+    const std::string cur = ( g_skill_filter < 0 )
+                            ? fmt_str( zh::g::SKILL_ALL_FMT, (int)g_guns.size() )
+                            : fmt_str( zh::g::SKILL_ITEM_FMT,
+                                       zh::skill( g_skill_keys[g_skill_filter] ).c_str(),
+                                       g_skill_counts[g_skill_filter] );
+    ImGui::SetNextItemWidth( 170 );
+    if( ImGui::BeginCombo( "##skillfilter", cur.c_str() ) ) {
+        if( ImGui::Selectable( fmt_str( zh::g::SKILL_ALL_FMT,
+                                        (int)g_guns.size() ).c_str(),
+                               g_skill_filter < 0 ) ) {
+            g_skill_filter = -1;
+            refresh_hits();
+        }
+        for( int i = 0; i < (int)g_skill_keys.size(); i++ ) {
+            ImGui::PushID( i );
+            if( ImGui::Selectable(
+                    fmt_str( zh::g::SKILL_ITEM_FMT,
+                             zh::skill( g_skill_keys[i] ).c_str(),
+                             g_skill_counts[i] ).c_str(),
+                    g_skill_filter == i ) ) {
+                g_skill_filter = i;
+                refresh_hits();
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndCombo();
+    }
 
     ImGui::Spacing();
     ImGui::TextDisabled( "%s", zh::g::CHAR_HINT );
@@ -1174,6 +1268,7 @@ int main( int argc, char **argv )
     std::setvbuf( stdout, nullptr, _IONBF, 0 );
 
     init_database();
+    build_skill_index();
 
     if( argc > 1 ) {
         std::snprintf( g_search, sizeof( g_search ), "%s", argv[1] );
